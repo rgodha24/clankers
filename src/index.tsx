@@ -1,15 +1,15 @@
-import { TextAttributes } from "@opentui/core";
 import { render } from "@opentui/react";
 
-function App() {
+import { useTerminalDimensions } from "@opentui/react";
+
+export const App = () => {
+  const { width, height } = useTerminalDimensions();
+
   return (
-    <box alignItems="center" justifyContent="center" flexGrow={1}>
-      <box justifyContent="center" alignItems="flex-end">
-        <ascii-font font="tiny" text="OpenTUI" />
-        <text attributes={TextAttributes.DIM}>What will you build?</text>
-      </box>
+    <box style={{ height: "100%" }} borderStyle="rounded">
+      <text content={`Terminal: ${width}x${height}`} />
     </box>
   );
-}
+};
 
 render(<App />);
