@@ -1,6 +1,7 @@
 import { RGBA } from "@opentui/core";
-import { render } from "@opentui/react";
+import { render, useAppContext, useKeyboard } from "@opentui/react";
 import { useState } from "react";
+import { create, useStore } from "zustand";
 
 export type Clanker = {
   id: number;
@@ -18,7 +19,29 @@ const COLORS = {
 };
 const CLANKER_WIDTH = 40 - 2;
 
+type Message = {};
+type Store = {
+  chat: Record<number, string>;
+  messages: Record<number, Message[]>;
+  addMessage: (id: number, message: string) => void;
+  updateChat: (id: number, message: string) => void;
+};
+const chatState = create<Store>()((set) => ({
+  chat: {},
+  messages: {},
+  updateChat: (id, message) =>
+    set((state) => ({ chat: { ...state.chat, [id]: message } })),
+  addMessage: (id, message) =>
+    set((state) => ({
+      messages: {
+        ...state.messages,
+        [id]: [...(state.messages[id] || []), message],
+      },
+    })),
+}));
+
 const App = () => {
+  const { renderer } = useAppContext();
   const [projectName, setProjectName] = useState("blossom");
   const [clankers, setClankers] = useState([
     {
@@ -37,7 +60,7 @@ const App = () => {
       pr_number: 41,
     },
     {
-      id: 323,
+      id: 670,
       title: "title title title title title title title title title title",
       status: "merged",
       contextusage: 23.465,
@@ -46,27 +69,68 @@ const App = () => {
     },
   ] satisfies Clanker[]);
   const [selectedClankerId, setSelectedClankerId] = useState<number>();
+  const selectedClankerIndex = clankers.findIndex(
+    (clanker) => clanker.id === selectedClankerId,
+  );
+  useKeyboard((key) => {
+    if (key.name === "d" && key.ctrl) {
+      renderer?.console.toggle();
+    }
+    if (key.name === "o" && key.ctrl) {
+      renderer?.toggleDebugOverlay();
+    }
+    if (key.name === "j" && (key.option || key.meta)) {
+      console.log(selectedClankerIndex, "option+j");
+      if (
+        selectedClankerIndex !== -1 &&
+        selectedClankerIndex < clankers.length - 1
+      ) {
+        setSelectedClankerId(clankers[selectedClankerIndex + 1]!.id);
+      }
+    }
+    if (key.name === "k" && (key.option || key.meta)) {
+      console.log(selectedClankerIndex, "option+k");
+      if (selectedClankerIndex !== -1 && selectedClankerIndex > 0) {
+        setSelectedClankerId(clankers[selectedClankerIndex - 1]!.id);
+      }
+    }
+  });
 
   return (
-    <box style={{ height: "100%", width: "100%", flexDirection: "column" }}>
-      <box height={8} paddingLeft={2} paddingTop={1} paddingRight={1}>
+    <box
+      style={{ height: "100%", width: "100%", flexDirection: "column" }}
+      paddingLeft={1}
+    >
+      <box
+        height={8}
+        paddingTop={1}
+        paddingRight={1}
+        flexDirection="row"
+        gap={2}
+      >
         <ascii-font
-          text={`CLANKER / ${projectName}`}
+          text={selectedClankerId ? `CLANKER ${selectedClankerId}` : "CLANKERS"}
           style={{ font: "block" }}
         />
+        <ascii-font text="/" style={{ font: "block" }} />
+        <ascii-font text="/" style={{ font: "block" }} marginLeft={-3} />
+        <ascii-font text={projectName} style={{ font: "block" }} />
       </box>
       <box height="100%" flexDirection="row">
         <box width={CLANKER_WIDTH + 2} flexDirection="column">
-          <box flexGrow={1} flexDirection="column">
-            {clankers.map((clanker) => (
-              <Clanker
-                clanker={clanker}
-                key={clanker.id}
-                selectedClankerId={selectedClankerId}
-                setSelectedClankerId={setSelectedClankerId}
-              />
-            ))}
-          </box>
+          {clankers.map((clanker) => (
+            <Clanker
+              clanker={clanker}
+              key={clanker.id}
+              selectedClankerId={selectedClankerId}
+              setSelectedClankerId={setSelectedClankerId}
+            />
+          ))}
+          <box
+            flexGrow={1}
+            width="100%"
+            onMouseDown={() => setSelectedClankerId(undefined)}
+          />
           <box
             height={3}
             flexDirection="column"
@@ -76,6 +140,9 @@ const App = () => {
             <text content="main" />
           </box>
         </box>
+        <box flexDirection="column" flexGrow={1} borderStyle="single">
+          <Chat selectedClankerId={selectedClankerId} />
+        </box>
       </box>
     </box>
   );
@@ -83,7 +150,6 @@ const App = () => {
 
 function Clanker({
   clanker,
-  key,
   selectedClankerId,
   setSelectedClankerId,
 }: {
@@ -97,7 +163,7 @@ function Clanker({
       flexDirection="column"
       borderStyle={selectedClankerId === clanker.id ? "double" : undefined}
       borderColor={COLORS[clanker.status]}
-      key={key}
+      key={clanker.id}
       onMouseDown={() => setSelectedClankerId(clanker.id)}
       height={5}
     >
@@ -125,4 +191,35 @@ function Clanker({
   );
 }
 
-render(<App />);
+function Chat({
+  selectedClankerId,
+}: {
+  selectedClankerId: number | undefined;
+}) {
+  const { addMessage, updateChat, messages, chat } = useStore(chatState);
+
+  return (
+    <box flexDirection="column" height="100%">
+      <box flexGrow={1} height={3} borderStyle="rounded" borderColor="blue">
+        <text content={JSON.stringify({ chat, messages })} />
+      </box>
+      <box borderStyle="rounded" borderColor="red">
+        <input
+          placeholder={selectedClankerId ? "enter message" : "choose the agent"}
+          height={3}
+          focused={selectedClankerId !== undefined}
+          onInput={(val) => updateChat(selectedClankerId!, val)}
+          value={selectedClankerId ? (chat[selectedClankerId] ?? "") : ""}
+          focusedBackgroundColor="#002222"
+          backgroundColor="#000000"
+        />
+      </box>
+      <box flexDirection="row" height={1} justifyContent="space-between">
+        <text content="esc=cancel" />
+        <text content="enter=send" />
+      </box>
+    </box>
+  );
+}
+
+render(<App />, { useKittyKeyboard: true });

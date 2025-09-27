@@ -1,5 +1,5 @@
 {
-  "name": "clanker",
+  "name": "clankers",
   "module": "src/index.tsx",
   "type": "module",
   "private": true,
@@ -12,6 +12,8 @@
   "dependencies": {
     "@opentui/core": "^0.1.25",
     "@opentui/react": "^0.1.25",
-    "react": "^19.1.1"
+    "react": "^19.1.1",
+    "zustand": "^5.0.8"
   }
 }
+
