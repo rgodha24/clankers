@@ -1,8 +1,7 @@
 use futures::{SinkExt, TryStreamExt};
 use serde::{Deserialize, Serialize};
 use serde_jsonlines::{AsyncBufReadJsonLines, AsyncWriteJsonLines};
-use std::os::unix::fs::PermissionsExt;
-use tokio::io::{self, AsyncReadExt, AsyncWriteExt, BufReader, BufWriter};
+use tokio::io::{self, BufReader, BufWriter};
 use tokio::net::{UnixListener, UnixStream};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -11,40 +10,61 @@ pub enum Message {
     Ping,
 }
 
+// TODO: this should go in /run and have some diff permissions?
+const SOCKET_PATH: &str = "/tmp/clanker.sock";
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let args: Vec<String> = std::env::args().collect();
     if args.contains(&"--stdio".to_string()) {
-        println!("stdio");
-        let sock = UnixStream::connect("/run/clauded.sock").await?;
-        let (mut sr, mut sw) = sock.into_split();
-        let mut stdin = io::stdin();
-        let mut stdout = io::stdout();
+        let sock = UnixStream::connect(SOCKET_PATH).await?;
+        let (sr, sw) = sock.into_split();
+        let stdin = io::stdin();
+        let stdout = io::stdout();
 
-        // stdin -> socket
+        let mut socket_reader = BufReader::new(sr).json_lines::<Message>();
+        let mut socket_writer = BufWriter::new(sw).into_json_lines_sink();
+        let mut stdin_reader = BufReader::new(stdin).json_lines::<Message>();
+        let mut stdout_writer = BufWriter::new(stdout).into_json_lines_sink();
+
+        // stdin -> socket (only forward valid messages)
         let a = tokio::spawn(async move {
-            let mut buf = vec![0u8; 8192];
             loop {
-                let n = stdin.read(&mut buf).await?;
-                if n == 0 {
-                    break;
+                match stdin_reader.try_next().await {
+                    Ok(Some(msg)) => {
+                        if let Err(e) = socket_writer.send(msg).await {
+                            eprintln!("Failed to send to socket: {}", e);
+                            break;
+                        }
+                    }
+                    Ok(None) => break, // EOF
+                    Err(e) => {
+                        eprintln!("Failed to parse message from stdin: {}", e);
+                        // Continue to next message instead of breaking
+                        continue;
+                    }
                 }
-                sw.write_all(&buf[..n]).await?;
-                sw.flush().await?;
             }
             Ok::<_, anyhow::Error>(())
         });
 
-        // socket -> stdout
+        // socket -> stdout (only forward valid messages)
         let b = tokio::spawn(async move {
-            let mut buf = vec![0u8; 8192];
             loop {
-                let n = sr.read(&mut buf).await?;
-                if n == 0 {
-                    break;
+                match socket_reader.try_next().await {
+                    Ok(Some(msg)) => {
+                        if let Err(e) = stdout_writer.send(msg).await {
+                            eprintln!("Failed to send to stdout: {}", e);
+                            break;
+                        }
+                    }
+                    Ok(None) => break, // EOF
+                    Err(e) => {
+                        eprintln!("Failed to parse message from socket: {}", e);
+                        // Continue to next message instead of breaking
+                        continue;
+                    }
                 }
-                stdout.write_all(&buf[..n]).await?;
-                stdout.flush().await?;
             }
             Ok::<_, anyhow::Error>(())
         });
@@ -52,10 +72,10 @@ async fn main() -> anyhow::Result<()> {
         let _ = tokio::try_join!(a, b)?;
         return Ok(());
     }
-    let path = "/run/clauded.sock";
-    let _ = std::fs::remove_file(path);
-    let listener = UnixListener::bind(path)?;
-    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o660))?;
+
+    // daemon
+    let _ = std::fs::remove_file(SOCKET_PATH);
+    let listener = UnixListener::bind(SOCKET_PATH)?;
 
     loop {
         let (stream, _addr) = listener.accept().await?;
@@ -74,9 +94,16 @@ async fn handle_client(stream: UnixStream) -> anyhow::Result<()> {
 
     writer.send(&Message::Ping).await?;
 
-    while let Some(msg) = reader.try_next().await? {
+    loop {
+        let msg = reader.try_next().await;
         eprintln!("got: {:?}", msg);
+        if let Ok(Some(msg)) = msg {
+            eprintln!("got good msg: {:?}", msg);
+        } else {
+            break;
+        }
     }
 
+    println!("done");
     Ok(())
 }
