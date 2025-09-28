@@ -54,8 +54,6 @@ pub struct ClankerState {
     status: ClankerStatus,
     #[serde(skip)]
     pub stdin_tx: Option<mpsc::Sender<serde_json::Value>>,
-    #[serde(skip)]
-    pub history: VecDeque<serde_json::Value>,
     // Keep the old messages field for serialization compatibility
     messages: Vec<serde_json::Value>,
 }
@@ -73,7 +71,6 @@ impl ProjectState {
         self.clankers.entry(id).or_insert_with(|| ClankerState {
             status: ClankerStatus::Waiting,
             stdin_tx: None,
-            history: VecDeque::new(),
             messages: Vec::new(),
         })
     }
@@ -148,15 +145,9 @@ async fn main() -> anyhow::Result<()> {
 
     // Set up central aggregator system
     let state = Arc::new(Mutex::new(State::default()));
-    let (fanout_tx, mut fanout_rx0) = broadcast::channel::<Message>(1024);
+    // we dont need the rx here because we can get it out of tx
+    let (fanout_tx, _) = broadcast::channel::<Message>(1024);
     let (ingest_tx, mut ingest_rx) = mpsc::channel::<Message>(256);
-
-    // Consume the initial receiver to prevent channel from filling up
-    tokio::spawn(async move {
-        while let Ok(_msg) = fanout_rx0.recv().await {
-            // Drop messages - clients have their own subscribers
-        }
-    });
 
     // Central aggregator task
     {
@@ -175,7 +166,7 @@ async fn main() -> anyhow::Result<()> {
                         clankers: HashMap::new(),
                     });
                     let cl = proj.get_or_create_clanker(*clanker_id);
-                    cl.history.push_back(val.clone());
+                    cl.messages.push(val.clone());
                 }
                 // Fan out to all subscribers
                 let _ = fanout_tx.send(msg);
@@ -227,8 +218,6 @@ async fn handle_client(
             }
         }
     });
-
-    // Optional: greet
     let _ = out_tx.send(Message::Ping).await;
 
     // Handle inbound commands
