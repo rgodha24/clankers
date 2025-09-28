@@ -1,13 +1,71 @@
-# clanker
+# Clanker - OpenCode Edition
 
-so basically this is a terminal tui application to multiplex a bunch of clankers (e.g. claude code and codex. starting with claude code)
+Clanker is a terminal TUI application to multiplex multiple OpenCode instances (replacing Claude Code) for parallel coding tasks.
 
-the architecture is a solid+opentui thing to actually run the tui on the 'frontend'. this communicates with the 'backend' via the capnweb RPC protocol. the backend is a bun server that is communicating with the frontend thru JSONL. we're using this decoupling because the clankers (e.g. the claude codes) can maybe be running on a different computer, and the communication method might be happening over ssh.
+## Architecture Overview
 
-here is the functionality:
+The architecture uses a Solid+OpenTUI frontend that communicates with a Rust daemon via JSON-over-stdio protocol (wrapped over SSH when remote). **Key change: We now use OpenCode servers instead of Claude Code processes.**
+
+### Core Components
+
+1. **Frontend TUI** (src/index.tsx) - Built with OpenTUI Solid, shows Kanban board of tasks
+2. **Rust Daemon** (src/main.rs) - Manages OpenCode server processes and HTTP proxy
+3. **OpenCode Servers** - One `opencode serve -p <port>` per clanker+project combination
+4. **HTTP Proxy** - Routes requests to appropriate OpenCode servers with SSE support
+
+### OpenCode Integration
+
+Instead of spawning Claude Code processes, we:
+- Spawn `opencode serve -p <random_port>` for each clanker task
+- Proxy HTTP requests to the appropriate server based on (project, clanker_id)
+- Handle SSE streams by sending multiple HTTP responses with the same request ID
+- Use OpenCode's comprehensive HTTP API (sessions, messages, files, etc.)
+
+### Message Protocol
+
+The daemon communicates via JSONL messages over Unix socket:
+
+```rust
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type", content = "payload")]
+pub enum Message {
+    Ping,
+    DataRequest { project: String },
+    DataResponse { data: ProjectState, project: String },
+    OpenProject { name: String, upstream: String },
+    StartClanker { project: String, prompt: String },
+    
+    // New: HTTP proxy messages
+    HttpRequest {
+        id: String,        // Frontend-assigned ID
+        project: String,
+        clanker_id: u32,
+        method: String,
+        path: String,
+        query: Option<String>,
+        body: Option<serde_json::Value>,
+    },
+    
+    HttpResponse {
+        id: String,        // Same ID as request
+        status: u16,
+        body: serde_json::Value,
+        // For SSE: multiple responses sent with same ID
+    },
+}
+```
+
+### Key Features
+
+- **Local-first**: Works without internet, no GitHub required
+- **Git worktrees**: Each task gets its own branch (refs/heads/clanker/task-{id})
+- **Point-to-point sync**: Direct git fetch between daemon and client
+- **HTTP Proxy**: Full access to OpenCode's HTTP API
+- **SSE Support**: Real-time events via multiple HTTP responses with same ID
+- **Simple architecture**: Hackathon-friendly, prefer working over optimal
 Clanker is a local-first TUI (in src/index.tsx) that orchestrates many parallel coding tasks on a remote or local machine via a simple JSON-over-stdio protocol (wrapped over SSH when remote). The daemon on the host clones the project into ~/.clanker/projects/{name}/repo, creates one git worktree per task (branch refs/heads/clanker/task-{id}), and updates an advertised read-only ref refs/clanker/tasks/{id} on every commit or auto-commit. The TUI shows a Kanban of tasks (Not Started, Running, Done, Failed), streams structured events/logs from the daemon, and focuses first on integrating Claude Code using its JSON event output (not embedding external TUIs). For code review on the Mac, the client performs on-demand git fetch directly from a URL without adding a remote, e.g., git fetch ssh://user@host/abs/path '+refs/clanker/tasks/:refs/remotes/clanker/tasks/', and then checks out a task in detached mode for viewing. Local mode uses the same protocol over stdio and fetches via file:///abs/path to avoid SSH, keeping the user’s repo and config untouched. No GitHub push/pull is required; synchronization is point-to-point from the daemon’s repo using Git’s native protocol, with optional bundle fallback only for demos. The scope stays lean: one remote, minimal events (Started, LogLine, TaskUpdated), simple presets, hard reset for review checkouts, and no extra directories unless the user wants a local worktree.
 
-its set up with the daemon running rust code (src/main.rs) that listens to a unix socket. we use a thin wrapper over this for the ssh case.
+The daemon listens on a Unix socket (/tmp/clanker.sock) and can be accessed via stdio wrapper for SSH cases.
 
 # OpenTUI Solid: Complete Developer Guide
 

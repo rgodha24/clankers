@@ -1,7 +1,11 @@
-use std::collections::{HashMap, VecDeque};
-use std::sync::Arc;
+use std::collections::HashMap;
+use std::sync::{
+    Arc,
+    atomic::{AtomicU16, Ordering},
+};
+use std::time::Duration;
 
-use futures::{SinkExt, TryStreamExt};
+use futures::{SinkExt, StreamExt, TryStreamExt};
 use serde::{Deserialize, Serialize};
 use serde_jsonlines::{AsyncBufReadJsonLines, AsyncWriteJsonLines};
 use tokio::io::{self, BufReader, BufWriter};
@@ -13,13 +17,21 @@ use tokio::sync::{Mutex, broadcast, mpsc};
 pub enum Message {
     /// incoming & outgoing
     Ping,
-    /// sent from the server to the client. this could be the first message that we send in the
-    /// specified clanker_id+project combo (e.g. if they just started the clanker.)
-    /// just outgoing
-    ClaudeCodeMsg {
+    /// HTTP proxy messages for OpenCode servers
+    HttpRequest {
+        id: String, // Frontend-assigned ID
         project: String,
         clanker_id: u32,
-        msg: serde_json::Value,
+        method: String,                  // "GET", "POST", etc.
+        path: String,                    // "/session", "/event", "/config", etc.
+        query: Option<String>,           // URL query parameters
+        body: Option<serde_json::Value>, // Request body for POST/PUT
+    },
+    HttpResponse {
+        id: String,  // Same as request ID
+        status: u16, // HTTP status code
+        body: serde_json::Value, // Response body
+                     // For SSE: multiple responses sent with same ID
     },
     /// incoming
     DataRequest { project: String },
@@ -52,10 +64,34 @@ enum ClankerStatus {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ClankerState {
     status: ClankerStatus,
+    port: Option<u16>, // Port where OpenCode server is running
     #[serde(skip)]
-    pub stdin_tx: Option<mpsc::Sender<serde_json::Value>>,
-    // Keep the old messages field for serialization compatibility
-    messages: Vec<serde_json::Value>,
+    http_tx: Option<mpsc::Sender<HttpRequestMessage>>, // Channel to server task
+}
+
+#[derive(Debug, Clone)]
+struct HttpRequestMessage {
+    id: String,
+    method: String,
+    path: String,
+    query: Option<String>,
+    body: Option<serde_json::Value>,
+}
+
+struct PortAllocator {
+    next_port: Arc<AtomicU16>,
+}
+
+impl PortAllocator {
+    fn new() -> Self {
+        Self {
+            next_port: Arc::new(AtomicU16::new(8000)), // Start at port 8000
+        }
+    }
+
+    fn allocate(&self) -> u16 {
+        self.next_port.fetch_add(1, Ordering::Relaxed)
+    }
 }
 
 impl Default for State {
@@ -70,10 +106,128 @@ impl ProjectState {
     fn get_or_create_clanker(&mut self, id: u32) -> &mut ClankerState {
         self.clankers.entry(id).or_insert_with(|| ClankerState {
             status: ClankerStatus::Waiting,
-            stdin_tx: None,
-            messages: Vec::new(),
+            port: None,
+            http_tx: None,
         })
     }
+}
+
+// OpenCode server task - spawns and manages one OpenCode server process
+async fn run_opencode_server(
+    port: u16,
+    project: String,
+    clanker_id: u32,
+    mut http_rx: mpsc::Receiver<HttpRequestMessage>,
+    fanout_tx: broadcast::Sender<Message>,
+) -> anyhow::Result<()> {
+    // 1. Spawn OpenCode process
+    let mut process = tokio::process::Command::new("opencode")
+        .args(&["serve", "-p", &port.to_string()])
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()?;
+
+    eprintln!(
+        "Started OpenCode server for project {} clanker {} on port {}",
+        project, clanker_id, port
+    );
+
+    // 2. Wait for server to start
+    tokio::time::sleep(Duration::from_millis(1000)).await;
+
+    // 3. Create HTTP client
+    let client = reqwest::Client::new();
+    let base_url = format!("http://localhost:{}", port);
+
+    // 4. Handle requests
+    loop {
+        tokio::select! {
+            Some(req) = http_rx.recv() => {
+                if let Err(e) = handle_http_request(&client, &base_url, req, &fanout_tx).await {
+                    eprintln!("HTTP request error: {}", e);
+                }
+            }
+            status = process.wait() => {
+                eprintln!("OpenCode server {} exited: {:?}", port, status);
+                break;
+            }
+        }
+    }
+
+    Ok(())
+}
+
+// Handle individual HTTP requests - differentiates between SSE and regular requests
+async fn handle_http_request(
+    client: &reqwest::Client,
+    base_url: &str,
+    req: HttpRequestMessage,
+    fanout_tx: &broadcast::Sender<Message>,
+) -> anyhow::Result<()> {
+    let url = if let Some(query) = &req.query {
+        format!("{}{}?{}", base_url, req.path, query)
+    } else {
+        format!("{}{}", base_url, req.path)
+    };
+
+    // CRITICAL: Handle SSE vs regular requests differently
+    if req.path == "/event" {
+        // SSE Request - stream multiple responses with same ID
+        handle_sse_request(client, &url, &req.id, fanout_tx).await?;
+    } else {
+        // Regular HTTP request - single response
+        let mut http_req = client.request(req.method.parse()?, &url);
+        if let Some(body) = &req.body {
+            http_req = http_req.json(body);
+        }
+
+        let response = http_req.send().await?;
+        let status = response.status().as_u16();
+        let body: serde_json::Value = response.json().await.unwrap_or(serde_json::Value::Null);
+
+        let _ = fanout_tx.send(Message::HttpResponse {
+            id: req.id,
+            status,
+            body,
+        });
+    }
+
+    Ok(())
+}
+
+// SSE stream handler - sends multiple responses with same request ID
+async fn handle_sse_request(
+    client: &reqwest::Client,
+    url: &str,
+    request_id: &str,
+    fanout_tx: &broadcast::Sender<Message>,
+) -> anyhow::Result<()> {
+    let response = client.get(url).send().await?;
+    let mut stream = response.bytes_stream();
+
+    // Parse SSE stream and send multiple HttpResponse messages
+    while let Some(chunk) = stream.next().await {
+        let chunk = chunk?;
+        let text = String::from_utf8_lossy(&chunk);
+
+        // Parse SSE format: "data: {...}\n\n"
+        for line in text.lines() {
+            if line.starts_with("data: ") {
+                let json_str = &line[6..]; // Remove "data: " prefix
+                if let Ok(event_data) = serde_json::from_str::<serde_json::Value>(json_str) {
+                    // Send each SSE event as separate HttpResponse with SAME ID
+                    let _ = fanout_tx.send(Message::HttpResponse {
+                        id: request_id.to_string(),
+                        status: 200,
+                        body: event_data,
+                    });
+                }
+            }
+        }
+    }
+
+    Ok(())
 }
 
 // TODO: this should go in /run and have some diff permissions?
@@ -145,30 +299,17 @@ async fn main() -> anyhow::Result<()> {
 
     // Set up central aggregator system
     let state = Arc::new(Mutex::new(State::default()));
+    let port_allocator = Arc::new(PortAllocator::new());
     // we dont need the rx here because we can get it out of tx
     let (fanout_tx, _) = broadcast::channel::<Message>(1024);
     let (ingest_tx, mut ingest_rx) = mpsc::channel::<Message>(256);
 
-    // Central aggregator task
+    // Central aggregator task - simplified for HTTP proxy mode
     {
-        let state = Arc::clone(&state);
         let fanout_tx = fanout_tx.clone();
         tokio::spawn(async move {
             while let Some(msg) = ingest_rx.recv().await {
-                if let Message::ClaudeCodeMsg {
-                    project,
-                    clanker_id,
-                    msg: val,
-                } = &msg
-                {
-                    let mut st = state.lock().await;
-                    let proj = st.projects.entry(project.clone()).or_insert(ProjectState {
-                        clankers: HashMap::new(),
-                    });
-                    let cl = proj.get_or_create_clanker(*clanker_id);
-                    cl.messages.push(val.clone());
-                }
-                // Fan out to all subscribers
+                // Just fan out messages, no special processing needed for HTTP proxy
                 let _ = fanout_tx.send(msg);
             }
         });
@@ -177,10 +318,12 @@ async fn main() -> anyhow::Result<()> {
     loop {
         let (stream, _addr) = listener.accept().await?;
         let state = Arc::clone(&state);
+        let port_allocator = Arc::clone(&port_allocator);
         let fanout_tx = fanout_tx.clone();
         let ingest_tx = ingest_tx.clone();
         tokio::spawn(async move {
-            if let Err(e) = handle_client(stream, state, fanout_tx, ingest_tx).await {
+            if let Err(e) = handle_client(stream, state, port_allocator, fanout_tx, ingest_tx).await
+            {
                 eprintln!("error: {}", e);
             }
         });
@@ -190,8 +333,9 @@ async fn main() -> anyhow::Result<()> {
 async fn handle_client(
     stream: UnixStream,
     state: Arc<Mutex<State>>,
+    port_allocator: Arc<PortAllocator>,
     fanout_tx: broadcast::Sender<Message>,
-    ingest_tx: mpsc::Sender<Message>,
+    _ingest_tx: mpsc::Sender<Message>,
 ) -> anyhow::Result<()> {
     let (r, w) = stream.into_split();
     let mut reader = BufReader::new(r).json_lines::<Message>();
@@ -224,99 +368,141 @@ async fn handle_client(
     while let Ok(opt) = reader.try_next().await {
         let Some(msg) = opt else { break };
         match msg {
+            Message::HttpRequest {
+                id,
+                project,
+                clanker_id,
+                method,
+                path,
+                query,
+                body,
+            } => {
+                // Look up the server for this (project, clanker_id)
+                let http_tx = {
+                    let st = state.lock().await;
+                    st.projects
+                        .get(&project)
+                        .and_then(|p| p.clankers.get(&clanker_id))
+                        .and_then(|c| c.http_tx.clone())
+                };
+
+                if let Some(tx) = http_tx {
+                    let _ = tx
+                        .send(HttpRequestMessage {
+                            id,
+                            method,
+                            path,
+                            query,
+                            body,
+                        })
+                        .await;
+                } else {
+                    // Server not found - send error response
+                    let _ = out_tx
+                        .send(Message::HttpResponse {
+                            id,
+                            status: 404,
+                            body: serde_json::json!({"error": "Clanker not found"}),
+                        })
+                        .await;
+                }
+            }
             Message::DataRequest { project } => {
-                // Send both a DataResponse and individual ClaudeCodeMsg messages for history
-                let (data_response, individual_messages): (Option<Message>, Vec<Message>) = {
+                // Simple data response - just return the current clankers
+                let data_response = {
                     let st = state.lock().await;
                     if let Some(p) = st.projects.get(&project) {
-                        // Create a serializable version of ProjectState for DataResponse
-                        let serializable_project = ProjectState {
-                            clankers: p
-                                .clankers
-                                .iter()
-                                .map(|(id, cl)| {
-                                    (
-                                        *id,
-                                        ClankerState {
-                                            status: cl.status.clone(),
-                                            stdin_tx: None,           // Not serialized
-                                            history: VecDeque::new(), // Not serialized
-                                            messages: cl.history.iter().cloned().collect(),
-                                        },
-                                    )
-                                })
-                                .collect(),
-                        };
-
-                        let data_response = Message::DataResponse {
-                            data: serializable_project,
+                        Message::DataResponse {
+                            data: p.clone(),
                             project: project.clone(),
-                        };
-
-                        // Also send individual messages for the history
-                        let mut individual = Vec::new();
-                        for (id, cl) in &p.clankers {
-                            for ev in &cl.history {
-                                individual.push(Message::ClaudeCodeMsg {
-                                    project: project.clone(),
-                                    clanker_id: *id,
-                                    msg: ev.clone(),
-                                });
-                            }
                         }
-
-                        (Some(data_response), individual)
                     } else {
-                        // Send empty response for unknown project
-                        let empty_response = Message::DataResponse {
+                        Message::DataResponse {
                             data: ProjectState {
                                 clankers: HashMap::new(),
                             },
                             project: project.clone(),
-                        };
-                        (Some(empty_response), Vec::new())
+                        }
                     }
                 };
-
-                if let Some(response) = data_response {
-                    let _ = out_tx.send(response).await;
-                }
-                for m in individual_messages {
-                    let _ = out_tx.send(m).await;
-                }
-            }
-            Message::ClaudeCodeMsg {
-                project,
-                clanker_id,
-                msg,
-            } => {
-                // Send through ingest to be processed and broadcast
-                let _ = ingest_tx
-                    .send(Message::ClaudeCodeMsg {
-                        project,
-                        clanker_id,
-                        msg,
-                    })
-                    .await;
+                let _ = out_tx.send(data_response).await;
             }
             Message::OpenProject { name, upstream } => {
-                eprintln!("TODO: implement OpenProject for {} from {}", name, upstream);
+                todo!("TODO: implement OpenProject for {} from {}", name, upstream);
                 // TODO: implement project creation/cloning logic
             }
             Message::StartClanker { project, prompt } => {
                 eprintln!(
-                    "TODO: implement StartClanker for {} with prompt: {}",
+                    "Starting clanker for project {} with prompt: {}",
                     project, prompt
                 );
-                // TODO: implement clanker spawning logic
+
+                // 1. Allocate port
+                let port = port_allocator.allocate();
+
+                // 2. Create channel for HTTP requests
+                let (http_tx, http_rx) = mpsc::channel::<HttpRequestMessage>(256);
+
+                // 3. Update state
+                let clanker_id = {
+                    let mut st = state.lock().await;
+                    let proj = st.projects.entry(project.clone()).or_insert(ProjectState {
+                        clankers: HashMap::new(),
+                    });
+                    let clanker_id = proj.clankers.len() as u32;
+                    let clanker = proj.get_or_create_clanker(clanker_id);
+                    clanker.port = Some(port);
+                    clanker.http_tx = Some(http_tx);
+                    clanker.status = ClankerStatus::Running;
+                    clanker_id
+                };
+
+                // 4. Spawn OpenCode server task
+                let project_clone = project.clone();
+                let fanout_tx_clone = fanout_tx.clone();
+                tokio::spawn(async move {
+                    if let Err(e) = run_opencode_server(
+                        port,
+                        project_clone,
+                        clanker_id,
+                        http_rx,
+                        fanout_tx_clone,
+                    )
+                    .await
+                    {
+                        eprintln!("OpenCode server error: {}", e);
+                    }
+                });
+
+                // 5. Send back the updated data immediately
+                let data_response = {
+                    let st = state.lock().await;
+                    if let Some(p) = st.projects.get(&project) {
+                        Message::DataResponse {
+                            data: p.clone(),
+                            project: project.clone(),
+                        }
+                    } else {
+                        Message::DataResponse {
+                            data: ProjectState {
+                                clankers: HashMap::new(),
+                            },
+                            project: project.clone(),
+                        }
+                    }
+                };
+                let _ = out_tx.send(data_response).await;
             }
             Message::Ping => {
                 let _ = out_tx.send(Message::Ping).await;
             }
-            _ => { /* handle others or ignore */ }
+            msg => {
+                panic!("Unhandled message: {:?}", msg);
+            }
         }
     }
 
     writer_task.abort();
     Ok(())
 }
+
