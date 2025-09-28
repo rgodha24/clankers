@@ -24,34 +24,29 @@ export type ClankerHistoryEntry = {
 
 // Tokyo Night Color Scheme
 const TOKYO_NIGHT = {
-  bg: "#222436",
-  bg_dark: "#1e2030",
-  bg_dark1: "#191B29",
-  bg_highlight: "#2f334d",
-  blue: "#82aaff",
-  blue1: "#65bcff",
-  blue2: "#0db9d7",
-  cyan: "#86e1fc",
-  comment: "#636da6",
-  dark3: "#545c7e",
-  dark5: "#737aa2",
-  fg: "#c8d3f5",
-  fg_dark: "#828bb8",
-  fg_gutter: "#3b4261",
-  green: "#c3e88d",
-  green1: "#4fd6be",
-  magenta: "#c099ff",
-  orange: "#ff966c",
-  purple: "#fca7ea",
-  red: "#ff757f",
-  red1: "#c53b53",
-  teal: "#4fd6be",
-  yellow: "#ffc777",
-  git: {
-    add: "#b8db87",
-    change: "#7ca1f2",
-    delete: "#e26a75",
-  },
+  bg: RGBA.fromHex("#222436"),
+  bg_dark: RGBA.fromHex("#1e2030"),
+  bg_dark1: RGBA.fromHex("#191B29"),
+  bg_highlight: RGBA.fromHex("#2f334d"),
+  blue: RGBA.fromHex("#82aaff"),
+  blue1: RGBA.fromHex("#65bcff"),
+  blue2: RGBA.fromHex("#0db9d7"),
+  cyan: RGBA.fromHex("#86e1fc"),
+  comment: RGBA.fromHex("#636da6"),
+  dark3: RGBA.fromHex("#545c7e"),
+  dark5: RGBA.fromHex("#737aa2"),
+  fg: RGBA.fromHex("#c8d3f5"),
+  fg_dark: RGBA.fromHex("#828bb8"),
+  fg_gutter: RGBA.fromHex("#3b4261"),
+  green: RGBA.fromHex("#c3e88d"),
+  green1: RGBA.fromHex("#4fd6be"),
+  magenta: RGBA.fromHex("#c099ff"),
+  orange: RGBA.fromHex("#ff966c"),
+  purple: RGBA.fromHex("#fca7ea"),
+  red: RGBA.fromHex("#ff757f"),
+  red1: RGBA.fromHex("#c53b53"),
+  teal: RGBA.fromHex("#4fd6be"),
+  yellow: RGBA.fromHex("#ffc777"),
 };
 
 const STATUS_COLORS = {
@@ -123,17 +118,20 @@ const App = () => {
     }
     if (key.name === "j" && (key.option || key.meta)) {
       console.log(selectedClankerIndex, "option+j");
-      if (
-        selectedClankerIndex !== -1 &&
-        selectedClankerIndex < clankers.length - 1
-      ) {
-        setSelectedClankerId(clankers[selectedClankerIndex + 1]!.id);
+      if (selectedClankerIndex !== -1) {
+        if (selectedClankerIndex < clankers.length - 1)
+          setSelectedClankerId(clankers[selectedClankerIndex + 1]!.id);
+      } else {
+        setSelectedClankerId(clankers[0]?.id);
       }
     }
     if (key.name === "k" && (key.option || key.meta)) {
       console.log(selectedClankerIndex, "option+k");
-      if (selectedClankerIndex !== -1 && selectedClankerIndex > 0) {
-        setSelectedClankerId(clankers[selectedClankerIndex - 1]!.id);
+      if (selectedClankerIndex !== -1) {
+        if (selectedClankerIndex > 0)
+          setSelectedClankerId(clankers[selectedClankerIndex - 1]!.id);
+      } else {
+        setSelectedClankerId(clankers[clankers.length - 1]?.id);
       }
     }
   });
@@ -145,7 +143,6 @@ const App = () => {
         width: "100%",
         flexDirection: "column",
         backgroundColor: TOKYO_NIGHT.bg,
-        color: TOKYO_NIGHT.fg,
       }}
       paddingLeft={1}
     >
@@ -205,7 +202,6 @@ const App = () => {
             borderStyle="single"
             borderColor={TOKYO_NIGHT.dark3}
             paddingLeft={1}
-            style={{ marginBottom: 1 }}
           >
             <Chat selectedClankerId={selectedClankerId} clankers={clankers} />
           </box>
@@ -236,11 +232,7 @@ function Clanker({
       height={5}
       style={{
         backgroundColor: isSelected ? TOKYO_NIGHT.bg_highlight : "transparent",
-        borderLeftWidth: 2,
-        borderLeftColor: STATUS_COLORS[clanker.status],
-        borderLeftStyle: "solid",
         padding: 1,
-        marginBottom: 1,
       }}
     >
       <box flexDirection="row" justifyContent="space-between">
@@ -289,10 +281,6 @@ function Chat({
 }) {
   const { addMessage, updateChat, messages, chat } = useStore(chatState);
 
-  const activeClankers = clankers.filter(
-    (c) => c.status === "running" || c.status === "waiting",
-  );
-
   return (
     <box flexDirection="column" height="100%">
       <box
@@ -325,14 +313,7 @@ function Chat({
         value={selectedClankerId ? (chat[selectedClankerId] ?? "") : ""}
         backgroundColor={TOKYO_NIGHT.bg}
         focusedBackgroundColor={TOKYO_NIGHT.bg}
-        style={{
-          fg: TOKYO_NIGHT.fg,
-          borderLeftWidth: 3,
-          borderLeftColor: selectedClankerId
-            ? TOKYO_NIGHT.blue
-            : TOKYO_NIGHT.comment,
-          borderLeftStyle: "solid",
-        }}
+        textColor={TOKYO_NIGHT.fg}
       />
     </box>
   );
@@ -351,36 +332,30 @@ function ClankersStatusWrapper({ clankers }: { clankers: Clanker[] }) {
 }
 
 function ClankersStatus({ clankers }: { clankers: Clanker[] }) {
-  const [history, setHistory] = useState<Record<number, ClankerHistoryEntry[]>>(
-    {},
-  );
+  const [history, setHistory] = useState<Record<number, string[]>>({});
   const { width } = useTerminalDimensions();
 
   const activeClankers = clankers.filter(
     (c) => c.status === "running" || c.status === "waiting",
   );
-  const boxHeight = activeClankers.length; // Exact height for number of clankers
+  const boxHeight = activeClankers.length;
 
-  // Calculate available width for history bars:
   // Terminal width (195) - left panel (40) - dot (1) - ID (4) - colon+space (2) - off by 3 fix
-  const historyWidth = width - 40 - 1 - 4 - 2 - 3;
+  const historyWidth = width - (CLANKER_WIDTH + 2) - 1 - 4 - 2 - 3;
 
   // Update history every second
   useEffect(() => {
     const interval = setInterval(() => {
-      const now = Date.now();
       setHistory((prev) => {
         const updated = { ...prev };
+
         activeClankers.forEach((clanker) => {
-          if (!updated[clanker.id]) updated[clanker.id] = [];
-          updated[clanker.id] = [
-            ...updated[clanker.id],
-            { timestamp: now, status: clanker.status },
-          ];
-          // Keep only last 120 entries (2 minutes worth)
-          if (updated[clanker.id].length > 120) {
-            updated[clanker.id] = updated[clanker.id].slice(-120);
-          }
+          if (!updated[clanker.id])
+            updated[clanker.id] = Array.from({ length: 240 }, () => " ");
+
+          // max 240 seconds. we dont rly care about inneficiency of the popping off the front of the array here bc its one every second anyways and computers are fast
+          updated[clanker.id]!.push(clanker?.status === "running" ? "█" : " ");
+          updated[clanker.id] = updated[clanker.id]!.slice(-240);
         });
         return updated;
       });
@@ -395,12 +370,7 @@ function ClankersStatus({ clankers }: { clankers: Clanker[] }) {
   return (
     <box flexDirection="column" height={boxHeight} paddingLeft={1}>
       {activeClankers.map((clanker) => (
-        <box
-          key={clanker.id}
-          flexDirection="row"
-          alignItems="center"
-          height={1}
-        >
+        <box key={clanker.id} flexDirection="row">
           <text
             content="●"
             style={{ fg: STATUS_COLORS[clanker.status] }}
@@ -412,8 +382,9 @@ function ClankersStatus({ clankers }: { clankers: Clanker[] }) {
             width={6}
           />
           <ClankerHistory
-            clanker={clanker}
-            history={history[clanker.id] || []}
+            history={
+              history[clanker.id] || Array.from({ length: 240 }, () => " ")
+            }
             width={historyWidth}
           />
         </box>
@@ -423,46 +394,22 @@ function ClankersStatus({ clankers }: { clankers: Clanker[] }) {
 }
 
 function ClankerHistory({
-  clanker,
   history,
   width,
 }: {
-  clanker: Clanker;
-  history: ClankerHistoryEntry[];
+  history: string[];
   width: number;
 }) {
-  const now = Date.now();
-  // Use exactly the width we calculated - each block is 1 character
   const maxHistorySeconds = Math.max(1, width);
 
-  // Get the recent history
-  const recentHistory = history
-    .filter((entry) => now - entry.timestamp < maxHistorySeconds * 1000)
-    .slice(-maxHistorySeconds);
-
-  // Create exactly width number of blocks
-  const blocks = Array.from({ length: maxHistorySeconds }, (_, i) => {
-    const secondTimestamp = now - (maxHistorySeconds - i - 1) * 1000;
-    const entry = recentHistory.find(
-      (h) => Math.abs(h.timestamp - secondTimestamp) < 500,
-    );
-    return entry?.status || null;
-  });
-
   return (
-    <text>
-      {blocks.map((status, i) => (
-        <span
-          key={i}
-          style={{
-            fg: status ? STATUS_COLORS[status] : TOKYO_NIGHT.dark3,
-          }}
-        >
-          █
-        </span>
-      ))}
-    </text>
+    <text
+      content={history.join("").slice(-maxHistorySeconds)}
+      bg={TOKYO_NIGHT.dark3}
+      fg={STATUS_COLORS.running}
+    />
   );
 }
 
-render(<App />, { useKittyKeyboard: true });
+render(<App />, { useKittyKeyboard: true, targetFps: 60 });
+
