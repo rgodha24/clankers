@@ -34,76 +34,7 @@ function allocatePort(): number {
   return nextPort++;
 }
 
-// Initialize with sample OpenCode project data
-const sampleTasks: ClankerTask[] = [
-  {
-    id: 324,
-    title: "title title title title title title title title title title",
-    project: "opencode",
-    status: "running",
-    contextusage: 23.465,
-    cost: 0.6721309412,
-    sessionID: "ses_67151623cffepFFcuR8ZAl53oi",
-    created_at: new Date().toISOString(),
-    updated_at: new Date().toISOString(),
-    logs: [],
-  },
-  {
-    id: 325,
-    title: "title title title title title title title title title title",
-    project: "opencode",
-    status: "waiting",
-    contextusage: 67.321423,
-    cost: 10.615,
-    pr_number: 41,
-    sessionID: "ses_67149c45effeciaTVy6rxDhVFL",
-    created_at: new Date().toISOString(),
-    updated_at: new Date().toISOString(),
-    logs: [],
-  },
-  {
-    id: 670,
-    title: "title title title title title title title title title title",
-    project: "opencode",
-    status: "merged",
-    contextusage: 23.465,
-    cost: 0.6721309412,
-    pr_number: 67,
-    sessionID: "ses_671cf1193ffe70abmJXUxKWo6P",
-    created_at: new Date().toISOString(),
-    updated_at: new Date().toISOString(),
-    logs: [],
-  },
-];
 
-// Initialize opencode project with sample data
-projects.set("opencode", {
-  name: "opencode",
-  upstream: "https://github.com/opencode/project",
-  tasks: sampleTasks,
-  nextTaskId: 671,
-});
-
-// Start OpenCode servers for sample tasks
-async function initializeSampleServers() {
-  for (const task of sampleTasks) {
-    try {
-      const port = await startOpenCodeServer(task.project, task.id);
-      task.port = port;
-      console.log(
-        `Initialized sample task ${task.id} with OpenCode server on port ${port}`,
-      );
-    } catch (error) {
-      console.error(
-        `Failed to start OpenCode server for sample task ${task.id}:`,
-        error,
-      );
-    }
-  }
-}
-
-// Initialize sample servers when module loads
-initializeSampleServers().catch(console.error);
 
 function resolveUpstream(projectId: string, clankerId: string): string {
   const key = `${projectId}:${clankerId}`;
@@ -117,19 +48,20 @@ function resolveUpstream(projectId: string, clankerId: string): string {
 async function startOpenCodeServer(
   project: string,
   taskId: number,
+  workingDir: string,
 ): Promise<number> {
   const port = allocatePort();
   const key = `${project}:${taskId}`;
 
-  // Start OpenCode server process in current working directory
+  // Start OpenCode server process in the project's git worktree
   const proc = Bun.spawn(["opencode", "serve", "-p", port.toString()], {
-    cwd: "/Users/rohangodha/Developer/opencode",
+    cwd: workingDir,
     stdout: "pipe",
     stderr: "pipe",
   });
 
   taskPorts.set(key, port);
-  console.log(`Started OpenCode server for ${key} on port ${port}`);
+  console.log(`Started OpenCode server for ${key} on port ${port} in ${workingDir}`);
   return port;
 }
 
@@ -195,7 +127,10 @@ app.post("/projects/:project/clankers", async (c) => {
   }
 
   const taskId = project.nextTaskId++;
-  const port = await startOpenCodeServer(projectName, taskId);
+  
+  // For now, we'll use the current working directory - git worktrees will be implemented next
+  const workingDir = process.cwd();
+  const port = await startOpenCodeServer(projectName, taskId, workingDir);
 
   const task: ClankerTask = {
     id: taskId,

@@ -79,32 +79,8 @@ const chatState = createWithSignal<Store>((set) => ({
 
 const App = () => {
   const renderer = useRenderer();
-  const [projectName] = createSignal("blossom");
-  const [clankers] = createSignal([
-    {
-      id: 324,
-      title: "title title title title title title title title title title",
-      status: "running",
-      contextusage: 23.465,
-      cost: 0.6721309412,
-    },
-    {
-      id: 325,
-      title: "title title title title title title title title title title",
-      status: "waiting",
-      contextusage: 67.321423,
-      cost: 10.615,
-      pr_number: 41,
-    },
-    {
-      id: 670,
-      title: "title title title title title title title title title title",
-      status: "merged",
-      contextusage: 23.465,
-      cost: 0.6721309412,
-      pr_number: 67,
-    },
-  ] satisfies Clanker[]);
+  const [projectName] = createSignal("");
+  const [clankers] = createSignal([] as Clanker[]);
   const [selectedClankerId, setSelectedClankerId] = createSignal<number>();
   
   const selectedClankerIndex = () => {
