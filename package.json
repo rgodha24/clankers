@@ -3,6 +3,10 @@
   "module": "src/index.tsx",
   "type": "module",
   "private": true,
+  "scripts": {
+    "api": "bun run src/api.ts",
+    "dev": "bun run src/index.tsx"
+  },
   "devDependencies": {
     "@types/bun": "latest"
   },
@@ -15,6 +19,7 @@
     "@opentui/core": "^0.1.25",
     "@opentui/solid": "^0.1.25",
     "babel-preset-solid": "^1.9.9",
+    "hono": "^4.9.9",
     "solid-js": "^1.9.9",
     "solid-zustand": "^1.8.1",
     "zustand": "^5.0.8"
