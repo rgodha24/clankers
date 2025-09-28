@@ -47,7 +47,7 @@ function getProjectRepoPath(projectName: string): string {
 }
 
 function getWorktreePath(projectName: string, taskId: number): string {
-  return join(getProjectRepoPath(projectName), "worktrees", `task-${taskId}`);
+  return join(homedir(), ".clankers", "worktrees", projectName, `task-${taskId}`);
 }
 
 async function ensureDirectoryExists(path: string): Promise<void> {
@@ -236,7 +236,7 @@ app.post("/projects/:project/clankers", async (c) => {
     // Create git worktree for this task
     const worktreePath = getWorktreePath(projectName, taskId);
 
-    await ensureDirectoryExists(join(repoPath, "worktrees"));
+    await ensureDirectoryExists(join(homedir(), ".clankers", "worktrees", projectName));
     await createWorktree(repoPath, worktreePath, taskId);
 
     port = await startOpenCodeServer(projectName, taskId, worktreePath);
