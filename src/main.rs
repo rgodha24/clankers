@@ -1,13 +1,64 @@
+use std::collections::HashMap;
+
 use futures::{SinkExt, TryStreamExt};
 use serde::{Deserialize, Serialize};
 use serde_jsonlines::{AsyncBufReadJsonLines, AsyncWriteJsonLines};
 use tokio::io::{self, BufReader, BufWriter};
 use tokio::net::{UnixListener, UnixStream};
+use tokio::sync::mpsc;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", content = "payload")]
 pub enum Message {
     Ping,
+    /// sent from the server to the client. this could be the first message that we send in the
+    /// specified clanker_id+project combo (e.g. if they just started the clanker.)
+    ClaudeCodeMsg {
+        project: String,
+        clanker_id: u32,
+        msg: serde_json::Value,
+    },
+    DataRequest {
+        project: String,
+    },
+    DataResponse {
+        data: (),
+        project: String,
+    },
+    OpenProject {
+        name: String,
+        upstream: String,
+    },
+    StartClanker {
+        project: String,
+        prompt: String,
+    },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct State {
+    projects: HashMap<String, ProjectState>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProjectState {
+    clankers: HashMap<u32, ClankerState>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+enum ClankerStatus {
+    Running,
+    Waiting,
+    Merged,
+    Deleted,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ClankerState {
+    status: ClankerStatus,
+    #[serde(skip)]
+    pub msg_sender: Option<mpsc::Sender<serde_json::Value>>,
+    messages: Vec<serde_json::Value>,
 }
 
 // TODO: this should go in /run and have some diff permissions?

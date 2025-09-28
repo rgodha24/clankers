@@ -222,4 +222,4 @@ function Chat({
   );
 }
 
-render(<App />, { useKittyKeyboard: true });
+render(<App />);
