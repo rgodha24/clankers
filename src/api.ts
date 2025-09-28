@@ -326,12 +326,21 @@ app.all("/:project/:clankerId/*", async (c) => {
     const segments = fullUrl.pathname.split("/").filter(Boolean);
     // segments[0] = projectId, segments[1] = clankerId, rest is the proxied path
     const restPath = segments.slice(2).join("/");
+
+    // Get the working directory for this task
+    const project = projects.get(projectId);
+    const taskIdNum = parseInt(clankerId);
+    const worktreePath = getWorktreePath(projectId, taskIdNum);
+
     // Rebuild target URL preserving query string
     const target = new URL(
       restPath,
       upstream.endsWith("/") ? upstream : upstream + "/",
     );
     target.search = fullUrl.search; // preserve query
+
+    // Add directory parameter to ensure OpenCode uses the correct working directory
+    target.searchParams.set('directory', worktreePath);
 
     // Manual proxy implementation for Bun
     const proxyHeaders = new Headers();
