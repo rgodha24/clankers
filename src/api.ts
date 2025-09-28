@@ -1,7 +1,8 @@
 import { Hono } from "hono";
-import { existsSync, mkdirSync } from "fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "fs";
 import { join } from "path";
 import { homedir } from "os";
+import { sleep } from "bun";
 
 interface ClankerTask {
   id: number;
@@ -31,7 +32,111 @@ const projects = new Map<string, ProjectState>();
 const taskPorts = new Map<string, number>(); // Maps "project:clankerId" to port
 
 // Port allocation for OpenCode servers
-let nextPort = 4000;
+let nextPort = 8423;
+
+// Persistence utilities
+function getStateFilePath(): string {
+  return join(homedir(), ".clankers", "state.json");
+}
+
+function saveState(): void {
+  const state = {
+    projects: Array.from(projects.entries()).map(([name, project]) => [
+      name,
+      project,
+    ]),
+    nextPort,
+  };
+  const stateDir = join(homedir(), ".clankers");
+  if (!existsSync(stateDir)) {
+    mkdirSync(stateDir, { recursive: true });
+  }
+  writeFileSync(getStateFilePath(), JSON.stringify(state, null, 2));
+}
+
+function loadState(): void {
+  const stateFile = getStateFilePath();
+  if (!existsSync(stateFile)) {
+    return;
+  }
+
+  try {
+    const state = JSON.parse(readFileSync(stateFile, "utf8"));
+    if (state.projects) {
+      projects.clear();
+      state.projects.forEach(([name, project]: [string, ProjectState]) => {
+        // Reset all task statuses to not_started since servers will be killed
+        project.tasks.forEach((task) => {
+          if (task.status === "running" || task.status === "waiting") {
+            task.status = "not_started";
+          }
+          task.port = undefined; // Clear port assignments
+        });
+        projects.set(name, project);
+      });
+    }
+    if (state.nextPort) {
+      nextPort = state.nextPort;
+    }
+  } catch (error) {
+    console.warn("Failed to load state:", error);
+  }
+}
+
+async function killExistingOpenCodeServers(): Promise<void> {
+  try {
+    // Find processes listening on our port range (4000+)
+    const lsofProc = Bun.spawn(["lsof", "-ti", ":4000-65535"], {
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    
+    const exitCode = await lsofProc.exited;
+    if (exitCode !== 0) {
+      console.log("No processes found on Clankers port range");
+      return;
+    }
+    
+    const stdout = await new Response(lsofProc.stdout).text();
+    const pids = stdout.trim().split("\n").filter(pid => pid.length > 0);
+    
+    if (pids.length === 0) {
+      console.log("No processes found on Clankers port range");
+      return;
+    }
+    
+    console.log(`Found ${pids.length} processes on Clankers port range: ${pids.join(", ")}`);
+    
+    // Kill each process
+    for (const pid of pids) {
+      try {
+        const killProc = Bun.spawn(["kill", pid], {
+          stdout: "pipe",
+          stderr: "pipe",
+        });
+        await killProc.exited;
+        console.log(`Killed process ${pid}`);
+      } catch (error) {
+        console.warn(`Failed to kill process ${pid}:`, error);
+      }
+    }
+    
+    console.log("Cleaned up existing OpenCode servers");
+  } catch (error) {
+    console.warn("Failed to clean up existing servers:", error);
+    // Fallback to pkill as backup
+    try {
+      const proc = Bun.spawn(["pkill", "-f", "opencode serve"], {
+        stdout: "pipe",
+        stderr: "pipe",
+      });
+      await proc.exited;
+      console.log("Used pkill fallback for cleanup");
+    } catch (fallbackError) {
+      console.log("No OpenCode processes to clean up");
+    }
+  }
+}
 
 function allocatePort(): number {
   return nextPort++;
@@ -47,7 +152,13 @@ function getProjectRepoPath(projectName: string): string {
 }
 
 function getWorktreePath(projectName: string, taskId: number): string {
-  return join(homedir(), ".clankers", "worktrees", projectName, `task-${taskId}`);
+  return join(
+    homedir(),
+    ".clankers",
+    "worktrees",
+    projectName,
+    `task-${taskId}`,
+  );
 }
 
 async function ensureDirectoryExists(path: string): Promise<void> {
@@ -138,6 +249,9 @@ async function startOpenCodeServer(
     stderr: "pipe",
   });
 
+  // TODO: something better
+  await sleep(500);
+
   taskPorts.set(key, port);
   console.log(
     `Started OpenCode server for ${key} on port ${port} in ${workingDir}`,
@@ -201,6 +315,7 @@ app.post("/projects/:project/open", async (c) => {
       tasks: [],
       nextTaskId: 100,
     });
+    saveState();
   }
 
   return c.json({ success: true, project: projectName });
@@ -236,7 +351,9 @@ app.post("/projects/:project/clankers", async (c) => {
     // Create git worktree for this task
     const worktreePath = getWorktreePath(projectName, taskId);
 
-    await ensureDirectoryExists(join(homedir(), ".clankers", "worktrees", projectName));
+    await ensureDirectoryExists(
+      join(homedir(), ".clankers", "worktrees", projectName),
+    );
     await createWorktree(repoPath, worktreePath, taskId);
 
     port = await startOpenCodeServer(projectName, taskId, worktreePath);
@@ -266,6 +383,7 @@ app.post("/projects/:project/clankers", async (c) => {
     };
 
     project.tasks.push(task);
+    saveState();
 
     return c.json({ taskId, port });
   } catch (error) {
@@ -310,6 +428,7 @@ app.put("/projects/:project/tasks/:taskId", async (c) => {
   if (body.status) task.status = body.status;
   if (body.logs) task.logs.push(...body.logs);
   task.updated_at = new Date().toISOString();
+  saveState();
 
   return c.json({ success: true });
 });
@@ -340,7 +459,7 @@ app.all("/:project/:clankerId/*", async (c) => {
     target.search = fullUrl.search; // preserve query
 
     // Add directory parameter to ensure OpenCode uses the correct working directory
-    target.searchParams.set('directory', worktreePath);
+    target.searchParams.set("directory", worktreePath);
 
     // Manual proxy implementation for Bun
     const proxyHeaders = new Headers();
@@ -388,6 +507,19 @@ app.all("/:project/:clankerId/*", async (c) => {
     return c.json({ error: "Upstream server not available" }, 502);
   }
 });
+
+// Initialize on startup
+async function initialize(): Promise<void> {
+  console.log("Initializing Clanker API...");
+  await killExistingOpenCodeServers();
+  loadState();
+  console.log(
+    `Loaded ${projects.size} projects with ${Array.from(projects.values()).reduce((total, p) => total + p.tasks.length, 0)} total tasks`,
+  );
+}
+
+// Call initialization
+await initialize();
 
 const port = 3000;
 console.log(`Starting Clanker API on port ${port}`);
