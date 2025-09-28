@@ -1,6 +1,11 @@
 import { RGBA } from "@opentui/core";
-import { render, useAppContext, useKeyboard } from "@opentui/react";
-import { useState } from "react";
+import {
+  render,
+  useAppContext,
+  useKeyboard,
+  useTerminalDimensions,
+} from "@opentui/react";
+import { useState, useEffect } from "react";
 import { create, useStore } from "zustand";
 
 export type Clanker = {
@@ -12,10 +17,42 @@ export type Clanker = {
   pr_number?: number;
 };
 
-const COLORS = {
-  merged: RGBA.fromHex("#00ff00"),
-  waiting: RGBA.fromHex("#f00f00"),
-  running: RGBA.fromHex("#ff00ff"),
+export type ClankerHistoryEntry = {
+  timestamp: number;
+  status: "running" | "waiting" | "merged";
+};
+
+// Tokyo Night Color Scheme
+const TOKYO_NIGHT = {
+  bg: RGBA.fromHex("#222436"),
+  bg_dark: RGBA.fromHex("#1e2030"),
+  bg_dark1: RGBA.fromHex("#191B29"),
+  bg_highlight: RGBA.fromHex("#2f334d"),
+  blue: RGBA.fromHex("#82aaff"),
+  blue1: RGBA.fromHex("#65bcff"),
+  blue2: RGBA.fromHex("#0db9d7"),
+  cyan: RGBA.fromHex("#86e1fc"),
+  comment: RGBA.fromHex("#636da6"),
+  dark3: RGBA.fromHex("#545c7e"),
+  dark5: RGBA.fromHex("#737aa2"),
+  fg: RGBA.fromHex("#c8d3f5"),
+  fg_dark: RGBA.fromHex("#828bb8"),
+  fg_gutter: RGBA.fromHex("#3b4261"),
+  green: RGBA.fromHex("#c3e88d"),
+  green1: RGBA.fromHex("#4fd6be"),
+  magenta: RGBA.fromHex("#c099ff"),
+  orange: RGBA.fromHex("#ff966c"),
+  purple: RGBA.fromHex("#fca7ea"),
+  red: RGBA.fromHex("#ff757f"),
+  red1: RGBA.fromHex("#c53b53"),
+  teal: RGBA.fromHex("#4fd6be"),
+  yellow: RGBA.fromHex("#ffc777"),
+};
+
+const STATUS_COLORS = {
+  merged: TOKYO_NIGHT.green,
+  waiting: TOKYO_NIGHT.yellow,
+  running: TOKYO_NIGHT.blue,
 };
 const CLANKER_WIDTH = 40 - 2;
 
@@ -81,24 +118,32 @@ const App = () => {
     }
     if (key.name === "j" && (key.option || key.meta)) {
       console.log(selectedClankerIndex, "option+j");
-      if (
-        selectedClankerIndex !== -1 &&
-        selectedClankerIndex < clankers.length - 1
-      ) {
-        setSelectedClankerId(clankers[selectedClankerIndex + 1]!.id);
+      if (selectedClankerIndex !== -1) {
+        if (selectedClankerIndex < clankers.length - 1)
+          setSelectedClankerId(clankers[selectedClankerIndex + 1]!.id);
+      } else {
+        setSelectedClankerId(clankers[0]?.id);
       }
     }
     if (key.name === "k" && (key.option || key.meta)) {
       console.log(selectedClankerIndex, "option+k");
-      if (selectedClankerIndex !== -1 && selectedClankerIndex > 0) {
-        setSelectedClankerId(clankers[selectedClankerIndex - 1]!.id);
+      if (selectedClankerIndex !== -1) {
+        if (selectedClankerIndex > 0)
+          setSelectedClankerId(clankers[selectedClankerIndex - 1]!.id);
+      } else {
+        setSelectedClankerId(clankers[clankers.length - 1]?.id);
       }
     }
   });
 
   return (
     <box
-      style={{ height: "100%", width: "100%", flexDirection: "column" }}
+      style={{
+        height: "100%",
+        width: "100%",
+        flexDirection: "column",
+        backgroundColor: TOKYO_NIGHT.bg,
+      }}
       paddingLeft={1}
     >
       <box
@@ -110,11 +155,21 @@ const App = () => {
       >
         <ascii-font
           text={selectedClankerId ? `CLANKER ${selectedClankerId}` : "CLANKERS"}
-          style={{ font: "block" }}
+          style={{ font: "block", fg: TOKYO_NIGHT.fg }}
         />
-        <ascii-font text="/" style={{ font: "block" }} />
-        <ascii-font text="/" style={{ font: "block" }} marginLeft={-3} />
-        <ascii-font text={projectName} style={{ font: "block" }} />
+        <ascii-font
+          text="/"
+          style={{ font: "block", fg: TOKYO_NIGHT.comment }}
+        />
+        <ascii-font
+          text="/"
+          style={{ font: "block", fg: TOKYO_NIGHT.comment }}
+          marginLeft={-3}
+        />
+        <ascii-font
+          text={projectName}
+          style={{ font: "block", fg: TOKYO_NIGHT.blue }}
+        />
       </box>
       <box height="100%" flexDirection="row">
         <box width={CLANKER_WIDTH + 2} flexDirection="column">
@@ -134,14 +189,23 @@ const App = () => {
           <box
             height={3}
             flexDirection="column"
-            borderStyle="rounded"
-            borderColor="blue"
+            borderStyle="single"
+            borderColor={TOKYO_NIGHT.dark3}
+            paddingLeft={1}
           >
-            <text content="main" />
+            <text content="main" style={{ fg: TOKYO_NIGHT.green }} />
           </box>
         </box>
-        <box flexDirection="column" flexGrow={1} borderStyle="single">
-          <Chat selectedClankerId={selectedClankerId} />
+        <box flexDirection="column" flexGrow={1}>
+          <box
+            flexGrow={1}
+            borderStyle="single"
+            borderColor={TOKYO_NIGHT.dark3}
+            paddingLeft={1}
+          >
+            <Chat selectedClankerId={selectedClankerId} clankers={clankers} />
+          </box>
+          <ClankersStatusWrapper clankers={clankers} />
         </box>
       </box>
     </box>
@@ -158,18 +222,28 @@ function Clanker({
   selectedClankerId: number | undefined;
   setSelectedClankerId: (id: number | undefined) => void;
 }) {
+  const isSelected = selectedClankerId === clanker.id;
+
   return (
     <box
       flexDirection="column"
-      borderStyle={selectedClankerId === clanker.id ? "double" : undefined}
-      borderColor={COLORS[clanker.status]}
       key={clanker.id}
       onMouseDown={() => setSelectedClankerId(clanker.id)}
       height={5}
+      style={{
+        backgroundColor: isSelected ? TOKYO_NIGHT.bg_highlight : "transparent",
+        padding: 1,
+      }}
     >
       <box flexDirection="row" justifyContent="space-between">
-        <text content={"clanker " + clanker.id.toString()} />
-        <text content={clanker.status} />
+        <text
+          content={"clanker " + clanker.id.toString()}
+          style={{ fg: TOKYO_NIGHT.fg_dark }}
+        />
+        <text
+          content={clanker.status}
+          style={{ fg: STATUS_COLORS[clanker.status] }}
+        />
       </box>
       <box
         flexDirection="row"
@@ -178,14 +252,21 @@ function Clanker({
         maxHeight={1}
       >
         <text
-          content={clanker.title.slice(0, CLANKER_WIDTH)}
+          content={clanker.title.slice(0, CLANKER_WIDTH - 2)}
           height={1}
           maxHeight={1}
+          style={{ fg: TOKYO_NIGHT.fg }}
         />
       </box>
       <box flexDirection="row" justifyContent="space-between" height={1}>
-        <text content={"$" + clanker.cost.toFixed(2)} />
-        <text content={clanker.contextusage.toFixed(2) + "%"} />
+        <text
+          content={"$" + clanker.cost.toFixed(2)}
+          style={{ fg: TOKYO_NIGHT.fg_dark }}
+        />
+        <text
+          content={clanker.contextusage.toFixed(2) + "%"}
+          style={{ fg: TOKYO_NIGHT.fg_dark }}
+        />
       </box>
     </box>
   );
@@ -193,33 +274,142 @@ function Clanker({
 
 function Chat({
   selectedClankerId,
+  clankers,
 }: {
   selectedClankerId: number | undefined;
+  clankers: Clanker[];
 }) {
   const { addMessage, updateChat, messages, chat } = useStore(chatState);
 
   return (
     <box flexDirection="column" height="100%">
-      <box flexGrow={1} height={3} borderStyle="rounded" borderColor="blue">
-        <text content={JSON.stringify({ chat, messages })} />
-      </box>
-      <box borderStyle="rounded" borderColor="red">
-        <input
-          placeholder={selectedClankerId ? "enter message" : "choose the agent"}
-          height={3}
-          focused={selectedClankerId !== undefined}
-          onInput={(val) => updateChat(selectedClankerId!, val)}
-          value={selectedClankerId ? (chat[selectedClankerId] ?? "") : ""}
-          focusedBackgroundColor="#002222"
-          backgroundColor="#000000"
+      <box
+        flexGrow={1}
+        style={{
+          backgroundColor: TOKYO_NIGHT.bg_dark,
+          padding: 1,
+          marginBottom: 1,
+        }}
+      >
+        <text
+          content={JSON.stringify({ chat, messages })}
+          style={{ fg: TOKYO_NIGHT.fg_dark }}
         />
       </box>
-      <box flexDirection="row" height={1} justifyContent="space-between">
-        <text content="esc=cancel" />
-        <text content="enter=send" />
-      </box>
+
+      <input
+        placeholder={
+          selectedClankerId ? "> enter message" : "> choose the agent"
+        }
+        height={Math.max(
+          1,
+          Math.ceil(
+            (selectedClankerId ? (chat[selectedClankerId] ?? "").length : 0) /
+              80,
+          ),
+        )}
+        focused={selectedClankerId !== undefined}
+        onInput={(val) => updateChat(selectedClankerId!, val)}
+        value={selectedClankerId ? (chat[selectedClankerId] ?? "") : ""}
+        backgroundColor={TOKYO_NIGHT.bg}
+        focusedBackgroundColor={TOKYO_NIGHT.bg}
+        textColor={TOKYO_NIGHT.fg}
+      />
     </box>
   );
 }
 
-render(<App />);
+function ClankersStatusWrapper({ clankers }: { clankers: Clanker[] }) {
+  const activeClankers = clankers.filter(
+    (c) => c.status === "running" || c.status === "waiting",
+  );
+
+  if (activeClankers.length === 0) {
+    return null;
+  }
+
+  return <ClankersStatus clankers={clankers} />;
+}
+
+function ClankersStatus({ clankers }: { clankers: Clanker[] }) {
+  const [history, setHistory] = useState<Record<number, string[]>>({});
+  const { width } = useTerminalDimensions();
+
+  const activeClankers = clankers.filter(
+    (c) => c.status === "running" || c.status === "waiting",
+  );
+  const boxHeight = activeClankers.length;
+
+  // Terminal width (195) - left panel (40) - dot (1) - ID (4) - colon+space (2) - off by 3 fix
+  const historyWidth = width - (CLANKER_WIDTH + 2) - 1 - 4 - 2 - 3;
+
+  // Update history every second
+  useEffect(() => {
+    const interval = setInterval(() => {
+      setHistory((prev) => {
+        const updated = { ...prev };
+
+        activeClankers.forEach((clanker) => {
+          if (!updated[clanker.id])
+            updated[clanker.id] = Array.from({ length: 240 }, () => " ");
+
+          // max 240 seconds. we dont rly care about inneficiency of the popping off the front of the array here bc its one every second anyways and computers are fast
+          updated[clanker.id]!.push(clanker?.status === "running" ? "█" : " ");
+          updated[clanker.id] = updated[clanker.id]!.slice(-240);
+        });
+        return updated;
+      });
+    }, 1000);
+    return () => clearInterval(interval);
+  }, [activeClankers]);
+
+  if (activeClankers.length === 0) {
+    return null;
+  }
+
+  return (
+    <box flexDirection="column" height={boxHeight} paddingLeft={1}>
+      {activeClankers.map((clanker) => (
+        <box key={clanker.id} flexDirection="row">
+          <text
+            content="●"
+            style={{ fg: STATUS_COLORS[clanker.status] }}
+            paddingRight={1}
+          />
+          <text
+            content={`${clanker.id}:`}
+            style={{ fg: STATUS_COLORS[clanker.status] }}
+            width={6}
+          />
+          <ClankerHistory
+            history={
+              history[clanker.id] || Array.from({ length: 240 }, () => " ")
+            }
+            width={historyWidth}
+          />
+        </box>
+      ))}
+    </box>
+  );
+}
+
+function ClankerHistory({
+  history,
+  width,
+}: {
+  history: string[];
+  width: number;
+}) {
+  const maxHistorySeconds = Math.max(1, width);
+
+  return (
+    <text
+      content={history.join("").slice(-maxHistorySeconds)}
+      bg={TOKYO_NIGHT.dark3}
+      fg={STATUS_COLORS.running}
+    />
+  );
+}
+
+render(<App />, { useKittyKeyboard: true, targetFps: 60 });
+
