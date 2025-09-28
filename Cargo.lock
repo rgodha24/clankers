@@ -70,6 +70,7 @@ dependencies = [
  "futures",
  "serde",
  "serde-jsonlines",
+ "serde_json",
  "tokio",
 ]
 
