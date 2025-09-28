@@ -1,4 +1,7 @@
 import { Hono } from "hono";
+import { existsSync, mkdirSync } from "fs";
+import { join } from "path";
+import { homedir } from "os";
 
 interface ClankerTask {
   id: number;
@@ -32,6 +35,55 @@ let nextPort = 4000;
 
 function allocatePort(): number {
   return nextPort++;
+}
+
+// Git and filesystem utilities
+function getClankersDir(): string {
+  return join(homedir(), ".clankers", "repos");
+}
+
+function getProjectRepoPath(projectName: string): string {
+  return join(getClankersDir(), projectName);
+}
+
+function getWorktreePath(projectName: string, taskId: number): string {
+  return join(getProjectRepoPath(projectName), "worktrees", `task-${taskId}`);
+}
+
+async function ensureDirectoryExists(path: string): Promise<void> {
+  if (!existsSync(path)) {
+    mkdirSync(path, { recursive: true });
+  }
+}
+
+async function cloneRepository(upstream: string, targetPath: string): Promise<void> {
+  const proc = Bun.spawn(["git", "clone", upstream, targetPath], {
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  
+  const exitCode = await proc.exited;
+  if (exitCode !== 0) {
+    const stderr = await new Response(proc.stderr).text();
+    throw new Error(`Failed to clone repository: ${stderr}`);
+  }
+}
+
+async function createWorktree(repoPath: string, worktreePath: string, taskId: number): Promise<void> {
+  const branchName = `clanker/task-${taskId}`;
+  
+  // Create worktree with new branch
+  const proc = Bun.spawn(["git", "worktree", "add", "-b", branchName, worktreePath, "HEAD"], {
+    cwd: repoPath,
+    stdout: "pipe", 
+    stderr: "pipe",
+  });
+  
+  const exitCode = await proc.exited;
+  if (exitCode !== 0) {
+    const stderr = await new Response(proc.stderr).text();
+    throw new Error(`Failed to create worktree: ${stderr}`);
+  }
 }
 
 
@@ -104,6 +156,17 @@ app.post("/projects/:project/open", async (c) => {
   const { upstream } = body;
 
   if (!projects.has(projectName)) {
+    const repoPath = getProjectRepoPath(projectName);
+    
+    // Ensure ~/.clankers/repos directory exists
+    await ensureDirectoryExists(getClankersDir());
+    
+    // Clone repository if it doesn't exist
+    if (!existsSync(repoPath)) {
+      console.log(`Cloning ${upstream} to ${repoPath}`);
+      await cloneRepository(upstream, repoPath);
+    }
+    
     projects.set(projectName, {
       name: projectName,
       upstream,
@@ -115,7 +178,7 @@ app.post("/projects/:project/open", async (c) => {
   return c.json({ success: true, project: projectName });
 });
 
-// Start new clanker task
+// Start new clanker task  
 app.post("/projects/:project/clankers", async (c) => {
   const projectName = c.req.param("project");
   const body = await c.req.json();
@@ -128,9 +191,26 @@ app.post("/projects/:project/clankers", async (c) => {
 
   const taskId = project.nextTaskId++;
   
-  // For now, we'll use the current working directory - git worktrees will be implemented next
-  const workingDir = process.cwd();
-  const port = await startOpenCodeServer(projectName, taskId, workingDir);
+  try {
+    // Ensure repository exists first
+    const repoPath = getProjectRepoPath(projectName);
+    if (!existsSync(repoPath)) {
+      console.log(`Repository doesn't exist, cloning ${project.upstream} to ${repoPath}`);
+      await ensureDirectoryExists(getClankersDir());
+      await cloneRepository(project.upstream, repoPath);
+    }
+    
+    // Create git worktree for this task
+    const worktreePath = getWorktreePath(projectName, taskId);
+    
+    await ensureDirectoryExists(join(repoPath, "worktrees"));
+    await createWorktree(repoPath, worktreePath, taskId);
+    
+    const port = await startOpenCodeServer(projectName, taskId, worktreePath);
+  } catch (error) {
+    console.error(`Error setting up task ${taskId}:`, error);
+    return c.json({ error: `Failed to set up task: ${error instanceof Error ? error.message : 'Unknown error'}` }, 500);
+  }
 
   const task: ClankerTask = {
     id: taskId,
