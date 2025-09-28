@@ -56,12 +56,15 @@ async function ensureDirectoryExists(path: string): Promise<void> {
   }
 }
 
-async function cloneRepository(upstream: string, targetPath: string): Promise<void> {
+async function cloneRepository(
+  upstream: string,
+  targetPath: string,
+): Promise<void> {
   const proc = Bun.spawn(["git", "clone", upstream, targetPath], {
     stdout: "pipe",
     stderr: "pipe",
   });
-  
+
   const exitCode = await proc.exited;
   if (exitCode !== 0) {
     const stderr = await new Response(proc.stderr).text();
@@ -69,24 +72,43 @@ async function cloneRepository(upstream: string, targetPath: string): Promise<vo
   }
 }
 
-async function createWorktree(repoPath: string, worktreePath: string, taskId: number): Promise<void> {
-  const branchName = `clanker/task-${taskId}`;
-  
-  // Create worktree with new branch
-  const proc = Bun.spawn(["git", "worktree", "add", "-b", branchName, worktreePath, "HEAD"], {
+async function pullLatestChanges(repoPath: string): Promise<void> {
+  const proc = Bun.spawn(["git", "pull"], {
     cwd: repoPath,
-    stdout: "pipe", 
+    stdout: "pipe",
     stderr: "pipe",
   });
-  
+
+  const exitCode = await proc.exited;
+  if (exitCode !== 0) {
+    const stderr = await new Response(proc.stderr).text();
+    console.warn(`Git pull failed (continuing anyway): ${stderr}`);
+  }
+}
+
+async function createWorktree(
+  repoPath: string,
+  worktreePath: string,
+  taskId: number,
+): Promise<void> {
+  const branchName = `clanker/task-${taskId}`;
+
+  // Create worktree with new branch
+  const proc = Bun.spawn(
+    ["git", "worktree", "add", "-b", branchName, worktreePath, "HEAD"],
+    {
+      cwd: repoPath,
+      stdout: "pipe",
+      stderr: "pipe",
+    },
+  );
+
   const exitCode = await proc.exited;
   if (exitCode !== 0) {
     const stderr = await new Response(proc.stderr).text();
     throw new Error(`Failed to create worktree: ${stderr}`);
   }
 }
-
-
 
 function resolveUpstream(projectId: string, clankerId: string): string {
   const key = `${projectId}:${clankerId}`;
@@ -105,6 +127,10 @@ async function startOpenCodeServer(
   const port = allocatePort();
   const key = `${project}:${taskId}`;
 
+  console.log(
+    `Starting OpenCode server for ${key} on port ${port} in ${workingDir}`,
+  );
+
   // Start OpenCode server process in the project's git worktree
   const proc = Bun.spawn(["opencode", "serve", "-p", port.toString()], {
     cwd: workingDir,
@@ -113,7 +139,9 @@ async function startOpenCodeServer(
   });
 
   taskPorts.set(key, port);
-  console.log(`Started OpenCode server for ${key} on port ${port} in ${workingDir}`);
+  console.log(
+    `Started OpenCode server for ${key} on port ${port} in ${workingDir}`,
+  );
   return port;
 }
 
@@ -157,32 +185,30 @@ app.post("/projects/:project/open", async (c) => {
 
   if (!projects.has(projectName)) {
     const repoPath = getProjectRepoPath(projectName);
-    
+
     // Ensure ~/.clankers/repos directory exists
     await ensureDirectoryExists(getClankersDir());
-    
+
     // Clone repository if it doesn't exist
     if (!existsSync(repoPath)) {
       console.log(`Cloning ${upstream} to ${repoPath}`);
       await cloneRepository(upstream, repoPath);
     }
-    
+
     projects.set(projectName, {
       name: projectName,
       upstream,
       tasks: [],
-      nextTaskId: 1,
+      nextTaskId: 100,
     });
   }
 
   return c.json({ success: true, project: projectName });
 });
 
-// Start new clanker task  
+// Start new clanker task
 app.post("/projects/:project/clankers", async (c) => {
   const projectName = c.req.param("project");
-  const body = await c.req.json();
-  const { prompt } = body;
 
   const project = projects.get(projectName);
   if (!project) {
@@ -190,46 +216,67 @@ app.post("/projects/:project/clankers", async (c) => {
   }
 
   const taskId = project.nextTaskId++;
-  
+  let port: number;
+
   try {
     // Ensure repository exists first
     const repoPath = getProjectRepoPath(projectName);
     if (!existsSync(repoPath)) {
-      console.log(`Repository doesn't exist, cloning ${project.upstream} to ${repoPath}`);
+      console.log(
+        `Repository doesn't exist, cloning ${project.upstream} to ${repoPath}`,
+      );
       await ensureDirectoryExists(getClankersDir());
       await cloneRepository(project.upstream, repoPath);
     }
-    
+
+    // Pull latest changes before creating worktree
+    console.log(`Pulling latest changes for ${projectName}`);
+    await pullLatestChanges(repoPath);
+
     // Create git worktree for this task
     const worktreePath = getWorktreePath(projectName, taskId);
-    
+
     await ensureDirectoryExists(join(repoPath, "worktrees"));
     await createWorktree(repoPath, worktreePath, taskId);
-    
-    const port = await startOpenCodeServer(projectName, taskId, worktreePath);
+
+    port = await startOpenCodeServer(projectName, taskId, worktreePath);
+
+    const resp = (await (
+      await fetch(`http://localhost:${port}/session`, {
+        method: "POST",
+      })
+    ).json()) as any;
+    console.log(resp);
+    const { id: sessionID, title } = resp;
+    console.log(`Session ID: ${sessionID}`);
+
+    const task: ClankerTask = {
+      id: taskId,
+      title,
+      project: projectName,
+      prompt: "",
+      status: "not_started",
+      contextusage: 0,
+      cost: 0,
+      sessionID,
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+      port,
+      logs: [],
+    };
+
+    project.tasks.push(task);
+
+    return c.json({ taskId, port });
   } catch (error) {
     console.error(`Error setting up task ${taskId}:`, error);
-    return c.json({ error: `Failed to set up task: ${error instanceof Error ? error.message : 'Unknown error'}` }, 500);
+    return c.json(
+      {
+        error: `Failed to set up task: ${error instanceof Error ? error.message : "Unknown error"}`,
+      },
+      500,
+    );
   }
-
-  const task: ClankerTask = {
-    id: taskId,
-    title: prompt || `Task ${taskId}`,
-    project: projectName,
-    prompt,
-    status: "not_started",
-    contextusage: 0,
-    cost: 0,
-    sessionID: `ses_${Date.now()}${Math.random().toString(36).substr(2, 9)}`,
-    created_at: new Date().toISOString(),
-    updated_at: new Date().toISOString(),
-    port,
-    logs: [],
-  };
-
-  project.tasks.push(task);
-
-  return c.json({ taskId, port });
 });
 
 // Get all tasks for a project
