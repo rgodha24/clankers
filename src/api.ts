@@ -27,6 +27,13 @@ interface ProjectState {
 const projects = new Map<string, ProjectState>();
 const taskPorts = new Map<string, number>(); // Maps "project:clankerId" to port
 
+// Port allocation for OpenCode servers
+let nextPort = 4000;
+
+function allocatePort(): number {
+  return nextPort++;
+}
+
 // Initialize with sample OpenCode project data
 const sampleTasks: ClankerTask[] = [
   {
@@ -39,7 +46,7 @@ const sampleTasks: ClankerTask[] = [
     sessionID: "ses_67151623cffepFFcuR8ZAl53oi",
     created_at: new Date().toISOString(),
     updated_at: new Date().toISOString(),
-    logs: []
+    logs: [],
   },
   {
     id: 325,
@@ -52,7 +59,7 @@ const sampleTasks: ClankerTask[] = [
     sessionID: "ses_67149c45effeciaTVy6rxDhVFL",
     created_at: new Date().toISOString(),
     updated_at: new Date().toISOString(),
-    logs: []
+    logs: [],
   },
   {
     id: 670,
@@ -65,8 +72,8 @@ const sampleTasks: ClankerTask[] = [
     sessionID: "ses_671cf1193ffe70abmJXUxKWo6P",
     created_at: new Date().toISOString(),
     updated_at: new Date().toISOString(),
-    logs: []
-  }
+    logs: [],
+  },
 ];
 
 // Initialize opencode project with sample data
@@ -74,15 +81,29 @@ projects.set("opencode", {
   name: "opencode",
   upstream: "https://github.com/opencode/project",
   tasks: sampleTasks,
-  nextTaskId: 671
+  nextTaskId: 671,
 });
 
-// Port allocation for OpenCode servers
-let nextPort = 4000;
-
-function allocatePort(): number {
-  return nextPort++;
+// Start OpenCode servers for sample tasks
+async function initializeSampleServers() {
+  for (const task of sampleTasks) {
+    try {
+      const port = await startOpenCodeServer(task.project, task.id);
+      task.port = port;
+      console.log(
+        `Initialized sample task ${task.id} with OpenCode server on port ${port}`,
+      );
+    } catch (error) {
+      console.error(
+        `Failed to start OpenCode server for sample task ${task.id}:`,
+        error,
+      );
+    }
+  }
 }
+
+// Initialize sample servers when module loads
+initializeSampleServers().catch(console.error);
 
 function resolveUpstream(projectId: string, clankerId: string): string {
   const key = `${projectId}:${clankerId}`;
@@ -303,5 +324,5 @@ console.log(`Starting Clanker API on port ${port}`);
 export default {
   port,
   fetch: app.fetch,
+  idleTimeout: 0,
 };
-
