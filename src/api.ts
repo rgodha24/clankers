@@ -142,6 +142,72 @@ function allocatePort(): number {
   return nextPort++;
 }
 
+// Autopush management
+const autopushProcesses = new Map<string, any>(); // Maps "project:taskId" to process
+
+async function startAutopush(projectName: string, taskId: number, worktreePath: string): Promise<void> {
+  const key = `${projectName}:${taskId}`;
+  
+  // Kill existing autopush for this task if it exists
+  if (autopushProcesses.has(key)) {
+    const existingProc = autopushProcesses.get(key);
+    existingProc.kill();
+    autopushProcesses.delete(key);
+  }
+
+  console.log(`Starting autopush for ${key} in ${worktreePath}`);
+  
+  // Get current branch name
+  const branchProc = Bun.spawn(["git", "branch", "--show-current"], {
+    cwd: worktreePath,
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  await branchProc.exited;
+  const branch = (await new Response(branchProc.stdout).text()).trim();
+
+  // Start autopush process
+  const proc = Bun.spawn(["bash", "-c", `
+while true; do
+  echo "$(date): Checking for changes in ${worktreePath}..."
+  cd "${worktreePath}"
+  
+  if [[ -n $(git status --porcelain) ]]; then
+    echo "Changes detected, committing..."
+    git add .
+    git commit -m "Auto-commit [${branch}]: $(date)"
+    
+    if git push -u origin "${branch}" 2>/dev/null || git push; then
+      echo "Successfully pushed at $(date)"
+    else
+      echo "Push failed at $(date)"
+    fi
+  else
+    echo "No changes to push"
+  fi
+  
+  sleep 30
+done
+  `], {
+    cwd: worktreePath,
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+
+  autopushProcesses.set(key, proc);
+  console.log(`Autopush started for ${key}`);
+}
+
+function stopAutopush(projectName: string, taskId: number): void {
+  const key = `${projectName}:${taskId}`;
+  const proc = autopushProcesses.get(key);
+  if (proc) {
+    proc.kill();
+    autopushProcesses.delete(key);
+    console.log(`Stopped autopush for ${key}`);
+  }
+}
+
 // Git and filesystem utilities
 function getClankersDir(): string {
   return join(homedir(), ".clankers", "repos");
@@ -357,6 +423,9 @@ app.post("/projects/:project/clankers", async (c) => {
     await createWorktree(repoPath, worktreePath, taskId);
 
     port = await startOpenCodeServer(projectName, taskId, worktreePath);
+
+    // Start autopush for this worktree
+    await startAutopush(projectName, taskId, worktreePath);
 
     const resp = (await (
       await fetch(`http://localhost:${port}/session`, {
