@@ -17,16 +17,42 @@ export type ClankerHistoryEntry = {
   status: "running" | "waiting" | "merged";
 };
 
-const COLORS = {
-  merged: RGBA.fromHex("#00ff00"),
-  waiting: RGBA.fromHex("#f00f00"),
-  running: RGBA.fromHex("#ff00ff"),
+// Tokyo Night Color Scheme
+const TOKYO_NIGHT = {
+  bg: "#222436",
+  bg_dark: "#1e2030",
+  bg_dark1: "#191B29",
+  bg_highlight: "#2f334d",
+  blue: "#82aaff",
+  blue1: "#65bcff",
+  blue2: "#0db9d7",
+  cyan: "#86e1fc",
+  comment: "#636da6",
+  dark3: "#545c7e",
+  dark5: "#737aa2",
+  fg: "#c8d3f5",
+  fg_dark: "#828bb8",
+  fg_gutter: "#3b4261",
+  green: "#c3e88d",
+  green1: "#4fd6be",
+  magenta: "#c099ff",
+  orange: "#ff966c",
+  purple: "#fca7ea",
+  red: "#ff757f",
+  red1: "#c53b53",
+  teal: "#4fd6be",
+  yellow: "#ffc777",
+  git: {
+    add: "#b8db87",
+    change: "#7ca1f2",
+    delete: "#e26a75",
+  }
 };
 
-const HISTORY_COLORS = {
-  merged: "#00ff00",
-  waiting: "#f00f00", 
-  running: "#ff00ff",
+const STATUS_COLORS = {
+  merged: TOKYO_NIGHT.green,
+  waiting: TOKYO_NIGHT.yellow,
+  running: TOKYO_NIGHT.blue,
 };
 const CLANKER_WIDTH = 40 - 2;
 
@@ -109,7 +135,13 @@ const App = () => {
 
   return (
     <box
-      style={{ height: "100%", width: "100%", flexDirection: "column" }}
+      style={{ 
+        height: "100%", 
+        width: "100%", 
+        flexDirection: "column",
+        backgroundColor: TOKYO_NIGHT.bg,
+        color: TOKYO_NIGHT.fg
+      }}
       paddingLeft={1}
     >
       <box
@@ -121,11 +153,11 @@ const App = () => {
       >
         <ascii-font
           text={selectedClankerId ? `CLANKER ${selectedClankerId}` : "CLANKERS"}
-          style={{ font: "block" }}
+          style={{ font: "block", fg: TOKYO_NIGHT.fg }}
         />
-        <ascii-font text="/" style={{ font: "block" }} />
-        <ascii-font text="/" style={{ font: "block" }} marginLeft={-3} />
-        <ascii-font text={projectName} style={{ font: "block" }} />
+        <ascii-font text="/" style={{ font: "block", fg: TOKYO_NIGHT.comment }} />
+        <ascii-font text="/" style={{ font: "block", fg: TOKYO_NIGHT.comment }} marginLeft={-3} />
+        <ascii-font text={projectName} style={{ font: "block", fg: TOKYO_NIGHT.blue }} />
       </box>
       <box height="100%" flexDirection="row">
         <box width={CLANKER_WIDTH + 2} flexDirection="column">
@@ -145,13 +177,20 @@ const App = () => {
           <box
             height={3}
             flexDirection="column"
-            borderStyle="rounded"
-            borderColor="blue"
+            borderStyle="single"
+            borderColor={TOKYO_NIGHT.dark3}
+            paddingLeft={1}
           >
-            <text content="main" />
+            <text content="main" style={{ fg: TOKYO_NIGHT.green }} />
           </box>
         </box>
-        <box flexDirection="column" flexGrow={1} borderStyle="single">
+        <box 
+          flexDirection="column" 
+          flexGrow={1} 
+          borderStyle="single"
+          borderColor={TOKYO_NIGHT.dark3}
+          paddingLeft={1}
+        >
           <Chat selectedClankerId={selectedClankerId} clankers={clankers} />
         </box>
       </box>
@@ -169,18 +208,32 @@ function Clanker({
   selectedClankerId: number | undefined;
   setSelectedClankerId: (id: number | undefined) => void;
 }) {
+  const isSelected = selectedClankerId === clanker.id;
+  
   return (
     <box
       flexDirection="column"
-      borderStyle={selectedClankerId === clanker.id ? "double" : undefined}
-      borderColor={COLORS[clanker.status]}
       key={clanker.id}
       onMouseDown={() => setSelectedClankerId(clanker.id)}
       height={5}
+      style={{
+        backgroundColor: isSelected ? TOKYO_NIGHT.bg_highlight : "transparent",
+        borderLeftWidth: 2,
+        borderLeftColor: STATUS_COLORS[clanker.status],
+        borderLeftStyle: "solid",
+        padding: 1,
+        marginBottom: 1
+      }}
     >
       <box flexDirection="row" justifyContent="space-between">
-        <text content={"clanker " + clanker.id.toString()} />
-        <text content={clanker.status} />
+        <text 
+          content={"clanker " + clanker.id.toString()} 
+          style={{ fg: TOKYO_NIGHT.fg_dark }}
+        />
+        <text 
+          content={clanker.status} 
+          style={{ fg: STATUS_COLORS[clanker.status] }}
+        />
       </box>
       <box
         flexDirection="row"
@@ -189,14 +242,21 @@ function Clanker({
         maxHeight={1}
       >
         <text
-          content={clanker.title.slice(0, CLANKER_WIDTH)}
+          content={clanker.title.slice(0, CLANKER_WIDTH - 2)}
           height={1}
           maxHeight={1}
+          style={{ fg: TOKYO_NIGHT.fg }}
         />
       </box>
       <box flexDirection="row" justifyContent="space-between" height={1}>
-        <text content={"$" + clanker.cost.toFixed(2)} />
-        <text content={clanker.contextusage.toFixed(2) + "%"} />
+        <text 
+          content={"$" + clanker.cost.toFixed(2)} 
+          style={{ fg: TOKYO_NIGHT.fg_dark }}
+        />
+        <text 
+          content={clanker.contextusage.toFixed(2) + "%"} 
+          style={{ fg: TOKYO_NIGHT.fg_dark }}
+        />
       </box>
     </box>
   );
@@ -212,29 +272,52 @@ function Chat({
   const { addMessage, updateChat, messages, chat } = useStore(chatState);
 
   const activeClankers = clankers.filter((c) => c.status === "running" || c.status === "waiting");
-  const statusHeight = activeClankers.length > 0 ? Math.max(3, activeClankers.length + 1) : 0;
 
   return (
     <box flexDirection="column" height="100%">
-      <box flexGrow={1} borderStyle="rounded" borderColor="blue">
-        <text content={JSON.stringify({ chat, messages })} />
-      </box>
-      <box borderStyle="rounded" borderColor="red">
-        <input
-          placeholder={selectedClankerId ? "enter message" : "choose the agent"}
-          height={3}
-          focused={selectedClankerId !== undefined}
-          onInput={(val) => updateChat(selectedClankerId!, val)}
-          value={selectedClankerId ? (chat[selectedClankerId] ?? "") : ""}
-          focusedBackgroundColor="#002222"
-          backgroundColor="#000000"
+      <box 
+        flexGrow={1} 
+        style={{ 
+          backgroundColor: TOKYO_NIGHT.bg_dark,
+          padding: 1,
+          marginBottom: 1
+        }}
+      >
+        <text 
+          content={JSON.stringify({ chat, messages })} 
+          style={{ fg: TOKYO_NIGHT.fg_dark }}
         />
       </box>
-      <box flexDirection="row" height={1} justifyContent="space-between">
-        <text content="esc=cancel" />
-        <text content="enter=send" />
+      
+      <box flexDirection="column" flexShrink={0}>
+        <box 
+          borderStyle="single"
+          borderColor={selectedClankerId ? TOKYO_NIGHT.blue : TOKYO_NIGHT.dark3}
+        >
+          <input
+            placeholder={selectedClankerId ? "enter message" : "choose the agent"}
+            height={3}
+            focused={selectedClankerId !== undefined}
+            onInput={(val) => updateChat(selectedClankerId!, val)}
+            value={selectedClankerId ? (chat[selectedClankerId] ?? "") : ""}
+            backgroundColor={TOKYO_NIGHT.bg_dark}
+            focusedBackgroundColor={TOKYO_NIGHT.bg_dark}
+            style={{ fg: TOKYO_NIGHT.fg }}
+          />
+        </box>
+        
+        <box 
+          flexDirection="row" 
+          height={1} 
+          justifyContent="space-between"
+          style={{ marginTop: 1 }}
+        >
+          <text content="esc=cancel" style={{ fg: TOKYO_NIGHT.comment }} />
+          <text content="enter=send" style={{ fg: TOKYO_NIGHT.comment }} />
+        </box>
+        
+        {activeClankers.length > 0 && <ClankersStatus clankers={clankers} />}
       </box>
-      {activeClankers.length > 0 && <ClankersStatus clankers={clankers} />}
     </box>
   );
 }
@@ -244,11 +327,11 @@ function ClankersStatus({ clankers }: { clankers: Clanker[] }) {
   const { width } = useTerminalDimensions();
 
   const activeClankers = clankers.filter((c) => c.status === "running" || c.status === "waiting");
-  const boxHeight = activeClankers.length;
+  const boxHeight = Math.min(3, activeClankers.length); // Cap the height to 3 rows max
   
   // Calculate exact available width for history bars:
-  // Total terminal width - left clanker panel (CLANKER_WIDTH + 2 = 42) - right border (1) - left padding of main (1) - dot (1) - clanker ID (4) - colon + space (2) - padding left (1)
-  const historyWidth = width - 42 - 1 - 1 - 1 - 4 - 2 - 1;
+  // Total terminal width - left clanker panel (CLANKER_WIDTH + 2 = 42) - right border (1) - left padding of main (1) - dot (1) - clanker ID (4) - colon + space (2) - padding left (1) - overshooting by 2
+  const historyWidth = width - 42 - 1 - 1 - 1 - 4 - 2 - 1 - 2;
 
   // Update history every second
   useEffect(() => {
@@ -278,17 +361,28 @@ function ClankersStatus({ clankers }: { clankers: Clanker[] }) {
   }
 
   return (
-    <box flexDirection="column" height={boxHeight} paddingLeft={1}>
+    <box 
+      flexDirection="column" 
+      height={boxHeight}
+      style={{ 
+        borderTopWidth: 1,
+        borderTopColor: TOKYO_NIGHT.dark3,
+        borderTopStyle: "single",
+        marginTop: 1
+      }}
+      paddingTop={1}
+      paddingLeft={1}
+    >
       {activeClankers.map((clanker) => (
         <box key={clanker.id} flexDirection="row" alignItems="center" height={1}>
           <text
             content="●"
-            style={{ fg: HISTORY_COLORS[clanker.status] }}
+            style={{ fg: STATUS_COLORS[clanker.status] }}
             paddingRight={1}
           />
           <text
             content={`${clanker.id}:`}
-            style={{ fg: HISTORY_COLORS[clanker.status] }}
+            style={{ fg: STATUS_COLORS[clanker.status] }}
             width={6}
           />
           <ClankerHistory clanker={clanker} history={history[clanker.id] || []} width={historyWidth} />
@@ -328,12 +422,12 @@ function ClankerHistory({
   return (
     <text>
       {blocks.map((status, i) => (
-        <span
-          key={i}
-          style={{
-            fg: status ? HISTORY_COLORS[status] : "#333333",
-          }}
-        >
+          <span
+            key={i}
+            style={{
+              fg: status ? STATUS_COLORS[status] : TOKYO_NIGHT.dark3,
+            }}
+          >
           █
         </span>
       ))}
