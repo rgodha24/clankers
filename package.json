@@ -10,9 +10,13 @@
     "typescript": "^5"
   },
   "dependencies": {
+    "@babel/core": "^7.28.3",
+    "@babel/preset-typescript": "^7.27.1",
     "@opentui/core": "^0.1.25",
-    "@opentui/react": "^0.1.25",
-    "react": "^19.1.1",
+    "@opentui/solid": "^0.1.25",
+    "babel-preset-solid": "^1.9.9",
+    "solid-js": "^1.9.9",
+    "solid-zustand": "^1.8.1",
     "zustand": "^5.0.8"
   }
 }

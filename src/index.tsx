@@ -1,12 +1,12 @@
 import { RGBA } from "@opentui/core";
 import {
   render,
-  useAppContext,
+  useRenderer,
   useKeyboard,
   useTerminalDimensions,
-} from "@opentui/react";
-import { useState, useEffect } from "react";
-import { create, useStore } from "zustand";
+} from "@opentui/solid";
+import { createSignal, createEffect, For } from "solid-js";
+import { createWithSignal } from "solid-zustand";
 
 export type Clanker = {
   id: number;
@@ -63,7 +63,7 @@ type Store = {
   addMessage: (id: number, message: string) => void;
   updateChat: (id: number, message: string) => void;
 };
-const chatState = create<Store>()((set) => ({
+const chatState = createWithSignal<Store>((set) => ({
   chat: {},
   messages: {},
   updateChat: (id, message) =>
@@ -78,9 +78,9 @@ const chatState = create<Store>()((set) => ({
 }));
 
 const App = () => {
-  const { renderer } = useAppContext();
-  const [projectName, setProjectName] = useState("blossom");
-  const [clankers, setClankers] = useState([
+  const renderer = useRenderer();
+  const [projectName] = createSignal("blossom");
+  const [clankers] = createSignal([
     {
       id: 324,
       title: "title title title title title title title title title title",
@@ -105,33 +105,38 @@ const App = () => {
       pr_number: 67,
     },
   ] satisfies Clanker[]);
-  const [selectedClankerId, setSelectedClankerId] = useState<number>();
-  const selectedClankerIndex = clankers.findIndex(
-    (clanker) => clanker.id === selectedClankerId,
-  );
+  const [selectedClankerId, setSelectedClankerId] = createSignal<number>();
+  
+  const selectedClankerIndex = () => {
+    const id = selectedClankerId();
+    return id !== undefined ? clankers().findIndex((clanker) => clanker.id === id) : -1;
+  };
+
   useKeyboard((key) => {
     if (key.name === "d" && key.ctrl) {
-      renderer?.console.toggle();
+      renderer.console.toggle();
     }
     if (key.name === "o" && key.ctrl) {
-      renderer?.toggleDebugOverlay();
+      renderer.toggleDebugOverlay();
     }
     if (key.name === "j" && (key.option || key.meta)) {
-      console.log(selectedClankerIndex, "option+j");
-      if (selectedClankerIndex !== -1) {
-        if (selectedClankerIndex < clankers.length - 1)
-          setSelectedClankerId(clankers[selectedClankerIndex + 1]!.id);
+      console.log(selectedClankerIndex(), "option+j");
+      const index = selectedClankerIndex();
+      if (index !== -1) {
+        if (index < clankers().length - 1)
+          setSelectedClankerId(clankers()[index + 1]!.id);
       } else {
-        setSelectedClankerId(clankers[0]?.id);
+        setSelectedClankerId(clankers()[0]?.id);
       }
     }
     if (key.name === "k" && (key.option || key.meta)) {
-      console.log(selectedClankerIndex, "option+k");
-      if (selectedClankerIndex !== -1) {
-        if (selectedClankerIndex > 0)
-          setSelectedClankerId(clankers[selectedClankerIndex - 1]!.id);
+      console.log(selectedClankerIndex(), "option+k");
+      const index = selectedClankerIndex();
+      if (index !== -1) {
+        if (index > 0)
+          setSelectedClankerId(clankers()[index - 1]!.id);
       } else {
-        setSelectedClankerId(clankers[clankers.length - 1]?.id);
+        setSelectedClankerId(clankers()[clankers().length - 1]?.id);
       }
     }
   });
@@ -153,34 +158,35 @@ const App = () => {
         flexDirection="row"
         gap={2}
       >
-        <ascii-font
-          text={selectedClankerId ? `CLANKER ${selectedClankerId}` : "CLANKERS"}
+        <ascii_font
+          text={selectedClankerId() ? `CLANKER ${selectedClankerId()}` : "CLANKERS"}
           style={{ font: "block", fg: TOKYO_NIGHT.fg }}
         />
-        <ascii-font
+        <ascii_font
           text="/"
           style={{ font: "block", fg: TOKYO_NIGHT.comment }}
         />
-        <ascii-font
+        <ascii_font
           text="/"
           style={{ font: "block", fg: TOKYO_NIGHT.comment }}
           marginLeft={-3}
         />
-        <ascii-font
-          text={projectName}
+        <ascii_font
+          text={projectName()}
           style={{ font: "block", fg: TOKYO_NIGHT.blue }}
         />
       </box>
       <box height="100%" flexDirection="row">
         <box width={CLANKER_WIDTH + 2} flexDirection="column">
-          {clankers.map((clanker) => (
-            <Clanker
-              clanker={clanker}
-              key={clanker.id}
-              selectedClankerId={selectedClankerId}
-              setSelectedClankerId={setSelectedClankerId}
-            />
-          ))}
+          <For each={clankers()}>
+            {(clanker) => (
+              <Clanker
+                clanker={clanker}
+                selectedClankerId={selectedClankerId()}
+                setSelectedClankerId={setSelectedClankerId}
+              />
+            )}
+          </For>
           <box
             flexGrow={1}
             width="100%"
@@ -191,6 +197,7 @@ const App = () => {
             flexDirection="column"
             borderStyle="single"
             borderColor={TOKYO_NIGHT.dark3}
+            border
             paddingLeft={1}
           >
             <text content="main" style={{ fg: TOKYO_NIGHT.green }} />
@@ -201,48 +208,43 @@ const App = () => {
             flexGrow={1}
             borderStyle="single"
             borderColor={TOKYO_NIGHT.dark3}
+            border
             paddingLeft={1}
           >
-            <Chat selectedClankerId={selectedClankerId} clankers={clankers} />
+            <Chat selectedClankerId={selectedClankerId()} clankers={clankers()} />
           </box>
-          <ClankersStatusWrapper clankers={clankers} />
+          <ClankersStatusWrapper clankers={clankers()} />
         </box>
       </box>
     </box>
   );
 };
 
-function Clanker({
-  clanker,
-  selectedClankerId,
-  setSelectedClankerId,
-}: {
+function Clanker(props: {
   clanker: Clanker;
-  key: number;
   selectedClankerId: number | undefined;
   setSelectedClankerId: (id: number | undefined) => void;
 }) {
-  const isSelected = selectedClankerId === clanker.id;
+  const isSelected = () => props.selectedClankerId === props.clanker.id;
 
   return (
     <box
       flexDirection="column"
-      key={clanker.id}
-      onMouseDown={() => setSelectedClankerId(clanker.id)}
+      onMouseDown={() => props.setSelectedClankerId(props.clanker.id)}
       height={5}
       style={{
-        backgroundColor: isSelected ? TOKYO_NIGHT.bg_highlight : "transparent",
+        backgroundColor: isSelected() ? TOKYO_NIGHT.bg_highlight : "transparent",
         padding: 1,
       }}
     >
       <box flexDirection="row" justifyContent="space-between">
         <text
-          content={"clanker " + clanker.id.toString()}
+          content={"clanker " + props.clanker.id.toString()}
           style={{ fg: TOKYO_NIGHT.fg_dark }}
         />
         <text
-          content={clanker.status}
-          style={{ fg: STATUS_COLORS[clanker.status] }}
+          content={props.clanker.status}
+          style={{ fg: STATUS_COLORS[props.clanker.status] }}
         />
       </box>
       <box
@@ -252,7 +254,7 @@ function Clanker({
         maxHeight={1}
       >
         <text
-          content={clanker.title.slice(0, CLANKER_WIDTH - 2)}
+          content={props.clanker.title.slice(0, CLANKER_WIDTH - 2)}
           height={1}
           maxHeight={1}
           style={{ fg: TOKYO_NIGHT.fg }}
@@ -260,11 +262,11 @@ function Clanker({
       </box>
       <box flexDirection="row" justifyContent="space-between" height={1}>
         <text
-          content={"$" + clanker.cost.toFixed(2)}
+          content={"$" + props.clanker.cost.toFixed(2)}
           style={{ fg: TOKYO_NIGHT.fg_dark }}
         />
         <text
-          content={clanker.contextusage.toFixed(2) + "%"}
+          content={props.clanker.contextusage.toFixed(2) + "%"}
           style={{ fg: TOKYO_NIGHT.fg_dark }}
         />
       </box>
@@ -272,14 +274,13 @@ function Clanker({
   );
 }
 
-function Chat({
-  selectedClankerId,
-  clankers,
-}: {
+function Chat(props: {
   selectedClankerId: number | undefined;
   clankers: Clanker[];
 }) {
-  const { addMessage, updateChat, messages, chat } = useStore(chatState);
+  const updateChat = chatState((state) => state.updateChat);
+  const messages = chatState((state) => state.messages);
+  const chat = chatState((state) => state.chat);
 
   return (
     <box flexDirection="column" height="100%">
@@ -292,64 +293,66 @@ function Chat({
         }}
       >
         <text
-          content={JSON.stringify({ chat, messages })}
+          content={JSON.stringify({ chat: chat(), messages: messages() })}
           style={{ fg: TOKYO_NIGHT.fg_dark }}
         />
       </box>
 
       <input
         placeholder={
-          selectedClankerId ? "> enter message" : "> choose the agent"
+          props.selectedClankerId ? "> enter message" : "> choose the agent"
         }
         height={Math.max(
           1,
           Math.ceil(
-            (selectedClankerId ? (chat[selectedClankerId] ?? "").length : 0) /
+            (props.selectedClankerId ? (chat()[props.selectedClankerId] ?? "").length : 0) /
               80,
           ),
         )}
-        focused={selectedClankerId !== undefined}
-        onInput={(val) => updateChat(selectedClankerId!, val)}
-        value={selectedClankerId ? (chat[selectedClankerId] ?? "") : ""}
-        backgroundColor={TOKYO_NIGHT.bg}
-        focusedBackgroundColor={TOKYO_NIGHT.bg}
-        textColor={TOKYO_NIGHT.fg}
+        focused={props.selectedClankerId !== undefined}
+        onInput={(val) => updateChat(props.selectedClankerId!, val)}
+        value={props.selectedClankerId ? (chat()[props.selectedClankerId] ?? "") : ""}
+        style={{
+          backgroundColor: TOKYO_NIGHT.bg,
+          focusedBackgroundColor: TOKYO_NIGHT.bg,
+          textColor: TOKYO_NIGHT.fg,
+        }}
       />
     </box>
   );
 }
 
-function ClankersStatusWrapper({ clankers }: { clankers: Clanker[] }) {
-  const activeClankers = clankers.filter(
+function ClankersStatusWrapper(props: { clankers: Clanker[] }) {
+  const activeClankers = () => props.clankers.filter(
     (c) => c.status === "running" || c.status === "waiting",
   );
 
-  if (activeClankers.length === 0) {
+  if (activeClankers().length === 0) {
     return null;
   }
 
-  return <ClankersStatus clankers={clankers} />;
+  return <ClankersStatus clankers={props.clankers} />;
 }
 
-function ClankersStatus({ clankers }: { clankers: Clanker[] }) {
-  const [history, setHistory] = useState<Record<number, string[]>>({});
-  const { width } = useTerminalDimensions();
+function ClankersStatus(props: { clankers: Clanker[] }) {
+  const [history, setHistory] = createSignal<Record<number, string[]>>({});
+  const dimensions = useTerminalDimensions();
 
-  const activeClankers = clankers.filter(
+  const activeClankers = () => props.clankers.filter(
     (c) => c.status === "running" || c.status === "waiting",
   );
-  const boxHeight = activeClankers.length;
+  const boxHeight = () => activeClankers().length;
 
   // Terminal width (195) - left panel (40) - dot (1) - ID (4) - colon+space (2) - off by 3 fix
-  const historyWidth = width - (CLANKER_WIDTH + 2) - 1 - 4 - 2 - 3;
+  const historyWidth = () => dimensions().width - (CLANKER_WIDTH + 2) - 1 - 4 - 2 - 3;
 
   // Update history every second
-  useEffect(() => {
+  createEffect(() => {
     const interval = setInterval(() => {
       setHistory((prev) => {
         const updated = { ...prev };
 
-        activeClankers.forEach((clanker) => {
+        activeClankers().forEach((clanker) => {
           if (!updated[clanker.id])
             updated[clanker.id] = Array.from({ length: 240 }, () => " ");
 
@@ -360,56 +363,57 @@ function ClankersStatus({ clankers }: { clankers: Clanker[] }) {
         return updated;
       });
     }, 1000);
+    
     return () => clearInterval(interval);
-  }, [activeClankers]);
+  });
 
-  if (activeClankers.length === 0) {
+  if (activeClankers().length === 0) {
     return null;
   }
 
   return (
-    <box flexDirection="column" height={boxHeight} paddingLeft={1}>
-      {activeClankers.map((clanker) => (
-        <box key={clanker.id} flexDirection="row">
-          <text
-            content="●"
-            style={{ fg: STATUS_COLORS[clanker.status] }}
-            paddingRight={1}
-          />
-          <text
-            content={`${clanker.id}:`}
-            style={{ fg: STATUS_COLORS[clanker.status] }}
-            width={6}
-          />
-          <ClankerHistory
-            history={
-              history[clanker.id] || Array.from({ length: 240 }, () => " ")
-            }
-            width={historyWidth}
-          />
-        </box>
-      ))}
+    <box flexDirection="column" height={boxHeight()} paddingLeft={1}>
+      <For each={activeClankers()}>
+        {(clanker) => (
+          <box flexDirection="row">
+            <text
+              content="●"
+              style={{ fg: STATUS_COLORS[clanker.status] }}
+              paddingRight={1}
+            />
+            <text
+              content={`${clanker.id}:`}
+              style={{ fg: STATUS_COLORS[clanker.status] }}
+              width={6}
+            />
+            <ClankerHistory
+              history={
+                history()[clanker.id] || Array.from({ length: 240 }, () => " ")
+              }
+              width={historyWidth()}
+            />
+          </box>
+        )}
+      </For>
     </box>
   );
 }
 
-function ClankerHistory({
-  history,
-  width,
-}: {
+function ClankerHistory(props: {
   history: string[];
   width: number;
 }) {
-  const maxHistorySeconds = Math.max(1, width);
+  const maxHistorySeconds = () => Math.max(1, props.width);
 
   return (
     <text
-      content={history.join("").slice(-maxHistorySeconds)}
-      bg={TOKYO_NIGHT.dark3}
-      fg={STATUS_COLORS.running}
+      content={props.history.join("").slice(-maxHistorySeconds())}
+      style={{
+        bg: TOKYO_NIGHT.dark3,
+        fg: STATUS_COLORS.running,
+      }}
     />
   );
 }
 
-render(<App />, { useKittyKeyboard: true, targetFps: 60 });
-
+render(() => <App />, { useKittyKeyboard: true, targetFps: 60 });
